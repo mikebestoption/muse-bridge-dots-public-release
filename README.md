@@ -1,4 +1,4 @@
-# Muse Bridge — v0.3.3 (the updater release + Teach mode)
+# Muse Bridge — v0.3.4 (ChatGPT-style drag-and-drop attachments)
 
 **Muse Bridge** is a free, open-source desktop app for Windows,
 powered by Muse Spark (Meta Model API). It is published under the
@@ -12,6 +12,28 @@ if you would like to propose an improvement. It has three jobs:
 3. **Bridge ChatGPT (Dot) and Muse** — the two-engine cross-check loop:
    ChatGPT results come in, Muse Spark reviews them; Muse Spark results go
    out as "verify this" packets; Dot's audit feedback comes back and gets logged.
+
+## Changes in 0.3.4
+
+- **Drag-and-drop attachments, ChatGPT-style.** Drag any file onto the
+  app window: a full-window "Drop files to attach" overlay appears,
+  and dropping stages the files as removable chips above the composer
+  (image thumbnails for screenshots; name + size for documents). The
+  📎 button is a styled multi-file picker — the raw native file input
+  from v0.3.3 is gone from view — and pasting files from the clipboard
+  lands in the same chips. Multiple attachments per message, including
+  several screenshots at once.
+- **Text documents ride with the message.** Attach a text file
+  (.txt, .md, .json, .csv, .log, .xml, .html, .js, .ts, .py, and other
+  plain text — unknown types are content-sniffed) and its contents are
+  included in the message Muse Spark receives, in a labeled
+  `[Attached document: ...]` block, capped at 100 KB per file with the
+  truncation stated inside the block. Your chat bubble shows a compact
+  document line, not the raw text. Anything that is neither a
+  png/jpeg/webp image nor readable text (executables, zips, other
+  image formats) is refused with an honest note naming the file —
+  never silently swallowed. In Mock mode, attachments stage the same
+  way and the mock reply acknowledges them by name.
 
 ## Changes in 0.3.3
 

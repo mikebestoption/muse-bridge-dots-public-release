@@ -481,7 +481,67 @@ try to fake them. Instead:
   listing each parked job and its reason. Do the tap, then re-run that
   job.
 
-## 13. Where everything lives — the Bridge folder and logs
+## 13. Teach mode — show Spark your screen, attach documents
+
+Teach mode lets Muse Spark *see* what you see, and *read* what you
+hand it — so you can show it what to click, what to open, and what to
+do. It never clicks anything by itself: anything it suggests still
+comes back to you as a normal approval card (Section 6).
+
+### 13a. Attach a screenshot or a document
+
+Three ways, all equivalent:
+
+1. **Drag & drop** — drag any file from Explorer or your desktop
+   onto the Muse Bridge window. A big dashed **"Drop files to
+   attach"** frame appears over the whole window; let go to attach.
+   Change your mind mid-drag? Press **Esc** (or drag the file back
+   out) and nothing is attached.
+2. **Paste** — copy an image (e.g. after **Win+Shift+S**) or copy
+   files in Explorer, click into the message box, and press
+   **Ctrl+V**.
+3. **The 📎 button** — click it and pick one or more files.
+
+Attached files appear as **chips** above the message box: a thumbnail
+for images, the file name + size for documents. Click the **×** on a
+chip to remove it. Nothing is sent until you press **Send** — and you
+can attach several files to one message (up to 6; at most 4 images).
+
+What can be attached:
+
+- **Screenshots** — png, jpeg, or webp images (up to ~8 MB each).
+  They are sent with your message in vision format, so Spark can
+  describe them, read screens, and advise from them.
+- **Text documents** — .txt, .md, .json, .csv, .log, .xml, .html,
+  code files (.js, .ts, .py, …), and other plain text (the app
+  sniffs the contents when the type is unclear). The document's text
+  is included in your message inside a labeled block, up to
+  **100 KB per file**; a bigger file is cut at 100 KB and the block
+  says so. Your chat bubble just shows a compact "📄 name" line —
+  the full text travels with the message, and stays in the chat
+  history so follow-up questions can use it.
+- **Anything else** (executables, zip files, gif/bmp images, …)
+  cannot be read yet: the app refuses it with a status note naming
+  the file. Nothing is ever silently dropped.
+
+In **Mock mode** attachments stage exactly the same way; the mock
+reply acknowledges them by name and type, and tells you Mock mode
+can't actually see or read them.
+
+### 13b. Save a screenshot as a lesson
+
+After sending a message with a screenshot, a **📸 Save as lesson**
+form appears under your message. Give it a name (e.g. "Elevate login
+screen") and, in your own words, what the shot shows, what to click,
+and what to do; optionally add a proposed action mapping ("open
+Elevate — fills go in this window"). **Save lesson on this PC**
+stores the screenshot + your words **only on this PC** — lessons are
+never uploaded anywhere; a lesson's notes ride along as context in
+later chats so Spark remembers what you taught it, and its screenshot
+is only sent again when you attach it yourself from the **📸 Lessons**
+panel (left column), which can also delete lessons.
+
+## 14. Where everything lives — the Bridge folder and logs
 
 By default the Bridge folder is in your **Documents**:
 
@@ -506,7 +566,7 @@ anywhere and never included in the code repo.
 Nothing in this app is uploaded anywhere except your chat messages going
 to Meta when you are in live mode.
 
-## 14. Troubleshooting
+## 15. Troubleshooting
 
 **"It says Mock mode / my answers start with [Mock mode…]"**
 You have not added an API key yet, or it was removed. **⚙ Settings** →
@@ -626,6 +686,18 @@ Option C).
 **+ New chat** clears the conversation. To remove the key, use
 **⚙ Settings → Remove key**. Your Bridge folder files (packets, logs,
 summaries) stay on disk until you delete them yourself in File Explorer.
+
+**"I dropped a file and the app said it can't be read"**
+Only png/jpeg/webp images and plain-text documents can be attached
+(Section 13a). Executables, zip files, and other image formats are
+refused — by design, with the file named in the status line so you
+know exactly which one. Convert or screenshot the content instead:
+a screenshot of a document page attaches as an image just fine.
+
+**"My document attached but Spark only saw part of it"**
+Text documents are included up to **100 KB per file**. A bigger file
+is cut at 100 KB, and the block in your message says so — split the
+file, or attach just the part you want Spark to read.
 
 ---
 
