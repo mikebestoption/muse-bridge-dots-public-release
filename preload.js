@@ -2,13 +2,20 @@
 
 // The renderer's only bridge to the main process. No Node access in the page.
 
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('desktop', {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (payload) => ipcRenderer.invoke('settings:save', payload),
   clearKey: () => ipcRenderer.invoke('settings:clearKey'),
+  clearVimeoToken: () => ipcRenderer.invoke('settings:clearVimeoToken'),
   chooseBridgeFolder: () => ipcRenderer.invoke('settings:chooseBridgeFolder'),
+
+  // The real on-disk path of a File the user dropped/picked, so main can
+  // stream-copy a large video without the bytes crossing IPC.
+  getFilePath: (file) => {
+    try { return webUtils && file ? webUtils.getPathForFile(file) : ''; } catch (_) { return ''; }
+  },
 
   getHistory: () => ipcRenderer.invoke('history:get'),
   saveHistory: (messages) => ipcRenderer.invoke('history:save', messages),
@@ -66,6 +73,25 @@ contextBridge.exposeInMainWorld('desktop', {
 
   // Audit signal system
   auditPackage: (item) => ipcRenderer.invoke('audit:package', item),
+
+  // Loops (CRUD over the userData store; the runner lives in the renderer)
+  loopsList: () => ipcRenderer.invoke('loops:list'),
+  loopsGet: (id) => ipcRenderer.invoke('loops:get', id),
+  loopsCreate: (data) => ipcRenderer.invoke('loops:create', data),
+  loopsUpdate: (id, data) => ipcRenderer.invoke('loops:update', id, data),
+  loopsRemove: (id) => ipcRenderer.invoke('loops:remove', id),
+  loopsExportDoc: (id) => ipcRenderer.invoke('loops:exportDoc', id),
+
+  // Teach-from-video SOPs
+  sopsList: () => ipcRenderer.invoke('sops:list'),
+  sopsGet: (id) => ipcRenderer.invoke('sops:get', id),
+  sopsRemove: (id) => ipcRenderer.invoke('sops:remove', id),
+  sopsExport: (id) => ipcRenderer.invoke('sops:export', id),
+  videoIntakeVimeo: (url) => ipcRenderer.invoke('video:intakeVimeo', url),
+  videoStageFile: (sourcePath) => ipcRenderer.invoke('video:stageFile', sourcePath),
+  videoUpdateDuration: (id, durationSec) => ipcRenderer.invoke('video:updateDuration', id, durationSec),
+  sopGenerate: (payload) => ipcRenderer.invoke('sop:generate', payload),
+  sopToLoop: (id) => ipcRenderer.invoke('sop:toLoop', id),
 
   // Generic local store for sessions + night queue (whitelisted keys in main)
   storeGet: (key) => ipcRenderer.invoke('store:get', key),

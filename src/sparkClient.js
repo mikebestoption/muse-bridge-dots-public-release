@@ -43,7 +43,22 @@ const SYSTEM_PROMPT = [
   '',
   'Bridge role: Michael also works with ChatGPT (Dot). When he pastes or imports a ChatGPT',
   'result, review it critically: what is correct, what is wrong, what is unverified. When he',
-  'wants something checked by ChatGPT, keep your answer checkable (claims + sources).'
+  'wants something checked by ChatGPT, keep your answer checkable (claims + sources).',
+  '',
+  'Loops: Michael can build reusable step-by-step workflows (Loops) in the app and run',
+  'them step by step. Desktop-task and vault-fill steps inside a Loop still go through the',
+  'same approval cards (or the one Night Queue approval when a Loop runs as a queue job).',
+  'If he asks how to repeat or automate something he does often, suggest he capture it as',
+  'a Loop, and offer the step list in the Loop step types: ask Muse Spark (a prompt),',
+  'desktop task (one action from the protocol above), vault fill (by entry label),',
+  'manual step (he does it and taps Done), or note.',
+  '',
+  'Teach from video: Michael can hand the app a Vimeo link or a video file of himself',
+  'doing a task; the app samples frames from the recording and turns it into an SOP',
+  '(standard operating procedure: goal, what you need first, numbered steps with exact',
+  'actions and expected results, watch-outs), and an SOP can be converted into a draft',
+  'Loop of manual steps for him to review. SOPs document exactly what to click, open,',
+  'and type — they never run anything by themselves.'
 ].join('\n');
 
 // Pure conversion of app messages to API messages.
@@ -103,10 +118,13 @@ class VisionRejectedError extends Error {
   }
 }
 
-async function chatCompletion({ apiKey, model, messages }) {
+// `system` optionally replaces the app system prompt (SOP generation
+// uses its own); it defaults to SYSTEM_PROMPT so existing callers and
+// the request shape they produce are unchanged.
+async function chatCompletion({ apiKey, model, messages, system }) {
   const body = {
     model,
-    messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...toApiMessages(messages)]
+    messages: [{ role: 'system', content: typeof system === 'string' && system ? system : SYSTEM_PROMPT }, ...toApiMessages(messages)]
   };
   const res = await fetch(`${API_BASE}/chat/completions`, {
     method: 'POST',

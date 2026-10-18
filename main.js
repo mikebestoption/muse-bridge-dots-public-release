@@ -1,8 +1,10 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, clipboard, protocol } = require('electron');
 const fs = require('fs');
 const path = require('path');
+const { Readable } = require('stream');
+const { pipeline } = require('stream/promises');
 
 const { createSettingsStore } = require('./src/settingsStore');
 const { chatCompletion } = require('./src/sparkClient');
@@ -19,12 +21,33 @@ const sessionGuard = require('./src/sessionGuard');
 const { createLessonsStore } = require('./src/lessons');
 const { createUpdater } = require('./src/updater');
 const attachmentsLib = require('./src/attachments');
+const { createLoopsStore } = require('./src/loops');
+const loopsCore = require('./src/loopsCore');
+const { createSopsStore, fetchVimeoOEmbed, fetchVimeoVideo, fetchVimeoTranscript, mockSop } = require('./src/sops');
+const sopCore = require('./src/sopCore');
+const { createVideoStore, MAX_VIDEO_BYTES } = require('./src/videoFiles');
 
 let settings = null;
 let mainWindow = null;
 let vault = null;
 let lessons = null;
 let updater = null;
+let loops = null;
+let sops = null;
+let videos = null;
+
+// Staged videos are served to the renderer's hidden <video> element for
+// frame sampling through a private scheme (streaming, range-capable),
+// so a 500 MB recording never crosses IPC as bytes. Registered before
+// app readiness, as Electron requires for privileged schemes.
+try {
+  protocol.registerSchemesAsPrivileged([
+    {
+      scheme: 'muse-video',
+      privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true, corsEnabled: true }
+    }
+  ]);
+} catch (_) { /* non-Electron load (bare node) — video serving is inert */ }
 
 // electron-updater is required lazily: it is only meaningful in a
 // packaged build, and a dev/bare-node load of main's module graph must
@@ -122,6 +145,40 @@ app.whenReady().then(() => {
   // ---- Teach lessons (local only; images live in userData) ----
   lessons = createLessonsStore(app.getPath('userData'));
 
+  // ---- Loops + SOPs + staged videos (all local, userData only) ----
+  loops = createLoopsStore(app.getPath('userData'));
+  sops = createSopsStore(app.getPath('userData'));
+  videos = createVideoStore(app.getPath('userData'));
+  try {
+    protocol.handle('muse-video', async (request) => {
+      const id = decodeURIComponent(new URL(request.url).pathname.replace(/^\//, ''));
+      const file = videos ? videos.getPath(id) : null;
+      if (!file) return new Response('Not found', { status: 404 });
+      const stat = fs.statSync(file);
+      const ext = path.extname(file).toLowerCase();
+      const type = ext === '.webm' ? 'video/webm' : ext === '.mov' || ext === '.m4v' ? 'video/quicktime' : 'video/mp4';
+      const headers = {
+        'Content-Type': type,
+        'Accept-Ranges': 'bytes',
+        'Access-Control-Allow-Origin': '*'
+      };
+      const range = request.headers.get('range');
+      const match = range ? /^bytes=(\d*)-(\d*)$/.exec(range) : null;
+      if (match) {
+        const start = match[1] ? parseInt(match[1], 10) : 0;
+        const end = match[2] ? parseInt(match[2], 10) : stat.size - 1;
+        if (Number.isFinite(start) && Number.isFinite(end) && start <= end && start < stat.size) {
+          headers['Content-Range'] = `bytes ${start}-${end}/${stat.size}`;
+          headers['Content-Length'] = String(end - start + 1);
+          return new Response(Readable.toWeb(fs.createReadStream(file, { start, end })), { status: 206, headers });
+        }
+        return new Response('Range not satisfiable', { status: 416 });
+      }
+      headers['Content-Length'] = String(stat.size);
+      return new Response(Readable.toWeb(fs.createReadStream(file)), { status: 200, headers });
+    });
+  } catch (_) { /* protocol unavailable — renderer falls back honestly */ }
+
   // ---- Auto-updater (public GitHub Releases feed; no credentials) ----
   updater = createUpdater({
     autoUpdater: loadAutoUpdater(),
@@ -147,6 +204,7 @@ app.whenReady().then(() => {
     return result;
   });
   ipcMain.handle('settings:clearKey', () => settings.clearKey());
+  ipcMain.handle('settings:clearVimeoToken', () => settings.clearVimeoToken());
   ipcMain.handle('settings:chooseBridgeFolder', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
       properties: ['openDirectory', 'createDirectory'],
@@ -190,6 +248,232 @@ app.whenReady().then(() => {
   ipcMain.handle('lessons:remove', (_e, id) => (lessons ? lessons.remove(id) : false));
   ipcMain.handle('lessons:context', () => (lessons ? lessons.getContext() : ''));
   ipcMain.handle('lessons:image', (_e, id) => (lessons ? lessons.getImageDataUrl(id) : null));
+
+  // ---- Loops IPC ----
+  // CRUD over the pure store; the runner itself lives in the renderer
+  // (it drives the existing chat/task IPCs through its injected deps).
+  const loopError = (err) => ({ ok: false, error: err.message });
+  ipcMain.handle('loops:list', () => (loops ? loops.list() : []));
+  ipcMain.handle('loops:get', (_e, id) => (loops ? loops.get(id) : null));
+  ipcMain.handle('loops:create', (_e, data) => {
+    try { return { ok: true, loop: loops.create(data || {}) }; } catch (err) { return loopError(err); }
+  });
+  ipcMain.handle('loops:update', (_e, id, data) => {
+    try { return { ok: true, loop: loops.update(id, data || {}) }; } catch (err) { return loopError(err); }
+  });
+  ipcMain.handle('loops:remove', (_e, id) => (loops ? loops.remove(id) : false));
+  ipcMain.handle('loops:exportDoc', async (_e, id) => {
+    const loop = loops ? loops.get(id) : null;
+    if (!loop) return { ok: false, error: 'That loop no longer exists.' };
+    const saved = await bridge.writeOutboxFile(
+      settings.getBridgePath(),
+      `${loopsCore.slugify(loop.name)}-loop.md`,
+      loopsCore.loopToMarkdown(loop)
+    );
+    return { ok: true, ...saved };
+  });
+
+  // ---- Teach-from-video: SOP IPC ----
+  const sopError = (err) => ({ ok: false, error: err.message });
+  ipcMain.handle('sops:list', () => (sops ? sops.list() : []));
+  ipcMain.handle('sops:get', (_e, id) => (sops ? sops.get(id) : null));
+  ipcMain.handle('sops:remove', (_e, id) => (sops ? sops.remove(id) : false));
+  ipcMain.handle('sops:export', async (_e, id) => {
+    const record = sops ? sops.get(id) : null;
+    if (!record) return { ok: false, error: 'That SOP record no longer exists.' };
+    if (!record.sop) return { ok: false, error: 'No SOP has been generated for that recording yet.' };
+    const markdown = record.markdown || sopCore.sopToMarkdown({
+      title: record.title, sop: record.sop, sourceLabel: record.sourceLabel,
+      transcriptSource: record.transcriptSource, frameCount: record.frameCount, createdAt: record.createdAt
+    });
+    const saved = await bridge.writeOutboxFile(
+      settings.getBridgePath(),
+      `${loopsCore.slugify(record.sop.title || record.title)}-sop.md`,
+      markdown
+    );
+    return { ok: true, ...saved };
+  });
+
+  // Vimeo link intake: oEmbed metadata always (public). With Michael's
+  // Vimeo token (Settings), also captions + a downloadable file for
+  // frame sampling. Without one — or when Vimeo exposes no download —
+  // the record stays an honest intake: nothing is analyzed from a
+  // thumbnail, and the note says exactly what is missing.
+  ipcMain.handle('video:intakeVimeo', async (_e, rawUrl) => {
+    try {
+      const url = String(rawUrl || '').trim();
+      const parsed = sopCore.parseVimeoUrl(url);
+      if (!parsed) return { ok: false, error: 'That does not look like a Vimeo link. Paste a vimeo.com video URL.' };
+      let meta = null;
+      try { meta = await fetchVimeoOEmbed(url); } catch (_) { /* private/odd links: id-only intake */ }
+      const notes = [];
+      let stagedId = '';
+      let transcriptText = '';
+      let transcriptSource = 'none';
+      const token = settings.getVimeoToken();
+      if (token) {
+        try {
+          const transcript = await fetchVimeoTranscript(parsed.id, token);
+          if (transcript) {
+            transcriptText = transcript.text;
+            transcriptSource = 'vimeo-captions';
+          }
+        } catch (_) { /* captions are best-effort */ }
+        try {
+          const video = await fetchVimeoVideo(parsed.id, token);
+          const download = sopCore.pickDownloadLink(video, MAX_VIDEO_BYTES);
+          if (download) {
+            const target = videos.newTarget('.mp4');
+            const res = await fetch(download.link);
+            if (res.ok && res.body) {
+              let bytes = 0;
+              const { Transform } = require('stream');
+              const counting = new Transform({
+                transform(chunk, _enc, cb) {
+                  bytes += chunk.length;
+                  if (bytes > MAX_VIDEO_BYTES) { cb(new Error('download exceeds 500 MB')); return; }
+                  cb(null, chunk);
+                }
+              });
+              await pipeline(Readable.fromWeb(res.body), counting, fs.createWriteStream(target.absPath));
+              videos.register(target.id, target.absPath, {
+                name: meta ? meta.title : `vimeo-${parsed.id}`,
+                size: bytes,
+                source: 'vimeo-download'
+              });
+              stagedId = target.id;
+            }
+          } else {
+            notes.push('Vimeo did not offer a downloadable file for this video (downloads are not enabled for it), so frames cannot be sampled from the link. Add the video file itself to sample frames.');
+          }
+        } catch (err) {
+          notes.push(`Vimeo API lookup failed (${err.message}) — metadata only for now.`);
+        }
+      } else {
+        notes.push('Add the video file or a Vimeo token to analyze the recording itself. Right now only the link and its public title/thumbnail are saved — nothing has been analyzed.');
+      }
+      const record = sops.createIntake({
+        sourceKind: 'vimeo',
+        title: meta ? meta.title : `Vimeo video ${parsed.id}`,
+        sourceLabel: `vimeo.com/${parsed.id}`,
+        sourceUrl: url,
+        thumbnailUrl: meta ? meta.thumbnailUrl : '',
+        durationSec: meta ? meta.durationSec : null,
+        stagedId,
+        note: notes.join(' ')
+      });
+      if (transcriptText) sops.update(record.id, { transcriptText, transcriptSource });
+      const fresh = sops.list().find((r) => r.id === record.id) || record;
+      return { ok: true, record: fresh };
+    } catch (err) {
+      return sopError(err);
+    }
+  });
+
+  // Local video file intake: streamed copy into userData (500 MB cap),
+  // then an intake record pointing at the staged copy.
+  ipcMain.handle('video:stageFile', async (_e, sourcePath) => {
+    try {
+      const staged = await videos.stageCopy(String(sourcePath || ''));
+      const base = staged.name.replace(/\.[^.]+$/, '');
+      const record = sops.createIntake({
+        sourceKind: 'file',
+        title: base || staged.name,
+        sourceLabel: staged.name,
+        stagedId: staged.id,
+        note: ''
+      });
+      return { ok: true, record, staged };
+    } catch (err) {
+      return sopError(err);
+    }
+  });
+
+  ipcMain.handle('video:updateDuration', (_e, id, durationSec) => {
+    try {
+      if (!sops || !Number.isFinite(durationSec)) return false;
+      const record = sops.get(id);
+      if (!record) return false;
+      sops.update(id, { durationSec });
+      return true;
+    } catch (_) {
+      return false;
+    }
+  });
+
+  // SOP generation. Frames arrive as validated JPEG data URLs from the
+  // renderer's sampler; the transcript comes from the record (Vimeo
+  // captions) or a user-supplied override (their transcript file).
+  // Mock mode returns the deterministic, clearly-labeled mock SOP.
+  ipcMain.handle('sop:generate', async (_e, payload) => {
+    try {
+      const { recordId, frames, transcriptText } = payload || {};
+      const record = sops ? sops.get(recordId) : null;
+      if (!record) return { ok: false, error: 'That SOP record no longer exists.' };
+      const frameList = (Array.isArray(frames) ? frames : [])
+        .filter((f) => typeof f === 'string' && /^data:image\/(jpeg|png|webp);base64,/.test(f) && f.length <= MAX_IMAGE_DATA_URL_CHARS)
+        .slice(0, sopCore.MAX_FRAMES);
+      let transcript = record.transcriptText || '';
+      let transcriptSource = record.transcriptSource || 'none';
+      if (typeof transcriptText === 'string' && transcriptText.trim()) {
+        transcript = transcriptText;
+        transcriptSource = 'user-file';
+        sops.update(recordId, { transcriptText: transcript, transcriptSource });
+      }
+      sops.update(recordId, { frameCount: frameList.length });
+      const apiKey = settings.getApiKey();
+      if (!apiKey) {
+        const sop = mockSop({ title: record.title, transcriptText: transcript, frameCount: frameList.length });
+        return { ok: true, mode: 'mock', record: sops.update(recordId, { sop }) };
+      }
+      const runVision = async (withFrames) => {
+        const userText = sopCore.buildSopUserText({
+          title: record.title,
+          transcript,
+          frameCount: withFrames ? frameList.length : 0,
+          transcriptSource
+        });
+        const message = { role: 'user', content: userText };
+        if (withFrames && frameList.length) message.imageDataUrls = frameList;
+        const reply = await chatCompletion({
+          apiKey,
+          model: settings.getModel(),
+          messages: [message],
+          system: sopCore.SOP_SYSTEM_PROMPT
+        });
+        return sopCore.parseSopReply(reply);
+      };
+      try {
+        const sop = await runVision(true);
+        return { ok: true, mode: 'live', record: sops.update(recordId, { sop }) };
+      } catch (err) {
+        if (err && err.code === 'VISION_REJECTED' && frameList.length) {
+          // Honest degradation, same rule as chat: say the API rejected
+          // the frames and generate from the transcript alone.
+          const sop = await runVision(false);
+          const updated = sops.update(recordId, { sop, frameCount: 0 });
+          return { ok: true, mode: 'live', visionRejected: true, record: updated };
+        }
+        throw err;
+      }
+    } catch (err) {
+      return sopError(err);
+    }
+  });
+
+  // SOP -> Loop draft. Creates the loop in the store (draft only —
+  // nothing runs) and returns it so the renderer can open the builder.
+  ipcMain.handle('sop:toLoop', (_e, id) => {
+    try {
+      const record = sops ? sops.get(id) : null;
+      if (!record) return { ok: false, error: 'That SOP record no longer exists.' };
+      if (!record.sop) return { ok: false, error: 'Generate the SOP first — then it can become a Loop.' };
+      const draft = sopCore.sopToLoopDraft(record);
+      return { ok: true, loop: loops.create(draft) };
+    } catch (err) {
+      return sopError(err);
+    }
+  });
 
   // ---- Chat (live Muse Spark when a key exists, mock otherwise) ----
   // A user message may carry screenshots (Teach mode): imageDataUrl

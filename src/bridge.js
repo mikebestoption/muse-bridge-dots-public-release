@@ -104,4 +104,14 @@ async function writePacket(bridgePath, target, messages) {
   return { filename, path: full };
 }
 
-module.exports = { ensureBridge, listInbox, readInboxFile, writePacket };
+// Generic Outbox writer (loop documentation, SOP exports). The name
+// is reduced to a bare filename inside Outbox — no traversal, ever.
+async function writeOutboxFile(bridgePath, filename, content) {
+  const { outbox } = ensureBridge(bridgePath);
+  const safeName = path.basename(String(filename || 'export.md'));
+  const full = path.join(outbox, safeName);
+  await fs.promises.writeFile(full, String(content || ''), 'utf8');
+  return { filename: safeName, path: full };
+}
+
+module.exports = { ensureBridge, listInbox, readInboxFile, writePacket, writeOutboxFile };

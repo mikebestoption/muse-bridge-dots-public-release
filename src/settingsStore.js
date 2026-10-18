@@ -17,6 +17,7 @@ const ALLOWED_MODELS = ['muse-spark-1.3', 'muse-spark-1.1'];
 function createSettingsStore(userDataPath, safeStorage, defaultBridgePath) {
   const settingsFile = path.join(userDataPath, 'settings.json');
   let inMemoryKey = null; // only used when safeStorage is unavailable
+  let inMemoryVimeoToken = null; // same treatment as the API key
 
   function readRaw() {
     try {
@@ -51,6 +52,7 @@ function createSettingsStore(userDataPath, safeStorage, defaultBridgePath) {
         : 30,
       hasKey: Boolean(raw.encryptedKey) || Boolean(inMemoryKey),
       keyPersisted: Boolean(raw.encryptedKey),
+      hasVimeoToken: Boolean(raw.encryptedVimeoToken) || Boolean(inMemoryVimeoToken),
       encryptionAvailable: Boolean(safeStorage && safeStorage.isEncryptionAvailable())
     };
   }
@@ -75,8 +77,20 @@ function createSettingsStore(userDataPath, safeStorage, defaultBridgePath) {
     }
   }
 
+  function getVimeoToken() {
+    if (inMemoryVimeoToken) return inMemoryVimeoToken;
+    const raw = readRaw();
+    if (!raw.encryptedVimeoToken) return null;
+    if (!safeStorage || !safeStorage.isEncryptionAvailable()) return null;
+    try {
+      return safeStorage.decryptString(Buffer.from(raw.encryptedVimeoToken, 'base64'));
+    } catch (_) {
+      return null;
+    }
+  }
+
   // apiKey: string to set, '' to leave unchanged is handled by caller passing null.
-  function save({ model, bridgePath, apiKey, auditNightDefault, vaultAutoLockMinutes, handsIdleThresholdSeconds, handsMaxWaitMinutes }) {
+  function save({ model, bridgePath, apiKey, vimeoToken, auditNightDefault, vaultAutoLockMinutes, handsIdleThresholdSeconds, handsMaxWaitMinutes }) {
     const raw = readRaw();
     if (typeof auditNightDefault === 'boolean') raw.auditNightDefault = auditNightDefault;
     if (Number.isFinite(vaultAutoLockMinutes) && vaultAutoLockMinutes >= 0) {
@@ -101,6 +115,15 @@ function createSettingsStore(userDataPath, safeStorage, defaultBridgePath) {
         inMemoryKey = apiKey;
       }
     }
+    if (typeof vimeoToken === 'string' && vimeoToken.length > 0) {
+      if (safeStorage && safeStorage.isEncryptionAvailable()) {
+        raw.encryptedVimeoToken = safeStorage.encryptString(vimeoToken).toString('base64');
+        inMemoryVimeoToken = null;
+      } else {
+        delete raw.encryptedVimeoToken;
+        inMemoryVimeoToken = vimeoToken;
+      }
+    }
     writeRaw(raw);
     return getPublicSettings();
   }
@@ -113,7 +136,15 @@ function createSettingsStore(userDataPath, safeStorage, defaultBridgePath) {
     return getPublicSettings();
   }
 
-  return { getPublicSettings, getModel, getBridgePath, getApiKey, save, clearKey };
+  function clearVimeoToken() {
+    const raw = readRaw();
+    delete raw.encryptedVimeoToken;
+    inMemoryVimeoToken = null;
+    writeRaw(raw);
+    return getPublicSettings();
+  }
+
+  return { getPublicSettings, getModel, getBridgePath, getApiKey, getVimeoToken, save, clearKey, clearVimeoToken };
 }
 
 module.exports = { createSettingsStore, ALLOWED_MODELS, DEFAULT_MODEL };
