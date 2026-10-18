@@ -1,4 +1,4 @@
-# Muse Bridge — v0.3.4 (ChatGPT-style drag-and-drop attachments)
+# Muse Bridge — v0.4.0 (Loops + Teach from video)
 
 **Muse Bridge** is a free, open-source desktop app for Windows,
 powered by Muse Spark (Meta Model API). It is published under the
@@ -12,6 +12,64 @@ if you would like to propose an improvement. It has three jobs:
 3. **Bridge ChatGPT (Dot) and Muse** — the two-engine cross-check loop:
    ChatGPT results come in, Muse Spark reviews them; Muse Spark results go
    out as "verify this" packets; Dot's audit feedback comes back and gets logged.
+
+## Changes in 0.4.0
+
+- **🔁 Loops — build a workflow once, run it any time.** A new Loops
+  panel holds named, reusable workflows built step by step, n8n-style:
+  **+ Add step**, pick a type, fill in its form, reorder with ↑/↓.
+  Step types map onto machinery that already existed — **Ask Muse
+  Spark** (a prompt; `{{prev}}` inserts the previous step's output),
+  **Desktop task** (one action from the existing protocol: open URL /
+  app, list folder, create / append file, run command), **Vault fill**
+  (fill_login / fill_totp by entry label), **Manual step** (text shown
+  to you; the run waits for your Done ✓ tap), and **Note**
+  (documentation only). **▶ Run** executes the steps in order with a
+  live checklist and log, plus Pause/Stop. **The approval model is
+  unchanged:** task and fill steps propose the standard approval cards
+  and never execute without approval; a denied or failed step halts
+  the run and offers Skip-and-continue or Stop; a step that needs you
+  in person ends the run as *waiting on you*. A reply from a prompt
+  step is never executed — only task/fill steps run actions. Every
+  loop has a **readable document view** (name, purpose, numbered
+  plain-English steps) and an **Export .md** to the Bridge Outbox —
+  loops are documented, not just stored. A loop can also be added to
+  the **Night Queue** as a job: the queue's one approval covers it,
+  manual steps park as *waiting on you*, and the morning summary
+  reports the outcome. Loops live in `loops.json` in userData, on
+  this PC only.
+- **🎬 Teach from video — SOPs from your recordings.** In the Lessons
+  panel: paste a **Vimeo link** or drop/pick a **video file** (mp4,
+  webm, mov — up to 500 MB, streamed into userData, never loaded whole
+  into memory). The app samples frames locally (every ~5 s, first and
+  last, max 24) and asks Muse Spark to write a structured **SOP** —
+  Title / Goal / What you need first / numbered Steps (exact action,
+  where/what exactly, expected result) / Watch-outs — saved to a new
+  SOPs library in userData, viewable in-app and exportable as .md.
+  **"🔁 Turn into a Loop"** converts an SOP into a draft Loop: each
+  SOP step becomes a manual step with its text preserved (steps that
+  unambiguously say "open <url>" or "create a file named X" are
+  pre-typed as task steps, clearly flagged ⚠ for review). The draft
+  opens in the builder for editing; it is never auto-run.
+- **The Vimeo boundary, honestly.** Public link metadata (title,
+  thumbnail, duration) comes from Vimeo's oEmbed — no token needed.
+  Analyzing the *recording itself* from a link needs captions and/or
+  a downloadable file, which only Vimeo's API provides: save a
+  **Vimeo access token** in Settings (stored encrypted on this PC,
+  exactly like your API key) and the app fetches the captions and,
+  when the video's owner has downloads enabled, the file for frame
+  sampling. **Without a token and without the file, intake saves the
+  link + metadata only and says so plainly — an SOP is never faked
+  from a thumbnail.** Transcripts come from Vimeo captions, or from
+  a transcript file you add to the record (.txt/.md/.vtt); an SOP
+  built without one is labeled *"from video frames only (no
+  narration transcript)"* in the app, in its export, and in any Loop
+  made from it.
+- **Deferred from the earlier v0.4 plan, stated plainly:** repo-watch
+  of `stage` branches, Standing Orders, and Windows notification
+  capture were specced for this version and are **not** in this
+  build — Loops + Teach from video took the slot. They remain future
+  work, not shipped features.
 
 ## Changes in 0.3.4
 
@@ -334,6 +392,9 @@ working folder, job queue and scrolling log, and runs independently:
   job at night exports its packet to Outbox (in mock mode it also simulates
   Dot's verdicts) — a real Dot run still needs ChatGPT, which has no
   unattended channel.
+- **v0.4:** a job can be a whole **Loop** (see "Changes in 0.4.0" above) —
+  the queue approval covers its steps; manual steps park the job as
+  *waiting on you*; a failed step stops that job and the queue moves on.
 - The one-off interactive approval gate is unchanged by all of this.
 
 ## The Vault — passwords + 2FA, filled for you (v0.2)
@@ -390,8 +451,13 @@ that used to be manual only because a password had to be typed.
 ## Where your data lives
 
 - Chat history: `history.json` in the app's userData folder on your PC.
-- Settings (model, Bridge path, encrypted key): same folder.
+- Settings (model, Bridge path, encrypted key, optional encrypted Vimeo
+  token): same folder.
 - Sessions / night queue: same folder.
+- Loops: `loops.json`, same folder (fill steps carry vault entry labels
+  only — never secrets).
+- SOPs: `sops.json`, same folder; staged video files live under
+  `video-temp/` in the same folder. Both stay on this PC.
 - Vault: `vault.json`, same folder — a single AES-256-GCM/scrypt-encrypted
   blob. It never leaves that folder and is excluded from this repo.
 - Nothing is uploaded anywhere except your chat messages going to the Meta

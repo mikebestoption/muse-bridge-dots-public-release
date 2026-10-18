@@ -13,6 +13,9 @@ history.json
 sessions.json
 nightQueue.json
 audits.json
+loops.json
+sops.json
+video-temp/
 *.log
 test-log.md
 

@@ -541,7 +541,154 @@ later chats so Spark remembers what you taught it, and its screenshot
 is only sent again when you attach it yourself from the **📸 Lessons**
 panel (left column), which can also delete lessons.
 
-## 14. Where everything lives — the Bridge folder and logs
+## 14. Loops — build a workflow once, run it any time
+
+A **Loop** is a workflow you build once, step by step — the same idea
+as an n8n workflow, inside the app. Open the **🔁 Loops** panel in the
+left column.
+
+### 14a. Build a loop
+
+1. Click **+ New loop**, give it a **name** and a **description** (the
+   description heads the loop's document — write what it's *for*).
+2. Click **+ Add step**, pick a step type, and fill in its form:
+   - **Ask Muse Spark** — a text prompt. The reply becomes the step's
+     output. Write `{{prev}}` anywhere in the prompt to insert the
+     previous step's output (e.g. "Summarize this: {{prev}}").
+   - **Desktop task** — ONE desktop action: open a URL or an app, list
+     a folder, create a file, append to a file, or run a command,
+     with the exact fields that action needs.
+   - **Vault fill** — fill a login or an authenticator code from a
+     Vault entry, chosen **by label** (start typing and the app
+     suggests your entry labels). The secret never appears here — the
+     app fetches it from the vault when the step runs, as always.
+   - **Manual step** — instructions for *you*. When the run reaches
+     it, the run waits until you tap **Done ✓** (or Skip).
+   - **Note** — documentation only. Never runs.
+3. Reorder steps with **↑ / ↓**, change a step's type with its
+   dropdown, delete with **✕**.
+4. Click **Save loop** (or **Create loop**). Loops are stored on this
+   PC only.
+
+### 14b. Run a loop
+
+Click **▶ Run** on the loop's card. You get a live checklist — every
+step flips from ○ to ▶ to ✓ (or ✗ / ⛔ / ⏸) with its output under it,
+plus a run log and **⏸ Pause** / **■ Stop** controls.
+
+The approval rule does not change inside a loop:
+
+- **Desktop task** and **Vault fill** steps show the same approval
+  card you'd get in chat (in the run view), with the exact action —
+  nothing executes until you **Approve & run** it.
+- If you **Deny** a step, or a step fails, the run **halts** and asks:
+  **Skip this step & continue**, or **Stop the run**.
+- If a step needs you in person (locked vault, locked screen, a
+  hardware key), the run ends as **waiting on you** with the reason.
+  Handle it and run the loop again.
+- A reply from an **Ask Muse Spark** step is only ever text. If it
+  proposes desktop actions, the run notes that and does **not** run
+  them — inside a loop, only the steps you built can act, each
+  through its own approval.
+
+### 14c. Document a loop
+
+Every loop documents itself. Click **📄 Doc** on its card to read it:
+the name, your description, and the numbered steps in plain English.
+**⬇ Export .md** writes that document into the Bridge **Outbox**
+(Section 16), so it can be shared, archived, or handed to Dot/Muse
+like any other packet.
+
+### 14d. Run a loop overnight
+
+On the loop's card, **🌙 Add to Night Queue** adds it as a job. When
+you approve the queue and it runs (Section 11):
+
+- The queue's one approval covers the loop's task/fill steps (main's
+  queue-mode guards still apply — typing steps wait out your idle
+  threshold, and park instead of typing over you).
+- **Manual steps park the job** as *waiting on you* — a loop that
+  needs your hands at 3 AM waits for morning, and the rest of the
+  queue keeps going.
+- A failed step stops that job (the queue continues), and the morning
+  summary reports the loop's step-by-step outcome; the full step log
+  is in `night-log.md`.
+
+## 15. Teach from video — an SOP from your recording
+
+You record yourself doing a task on the computer (you use **Vimeo**).
+Teach-from-video turns that recording into a written **SOP** —
+Standard Operating Procedure: exactly what to click, open, and do,
+step by step — and then, if you want, into a **Loop**.
+
+Open **📸 Lessons & SOPs** (left column). The **🎬 Teach from video**
+box is at the top.
+
+### 15a. Add a recording
+
+Two ways:
+
+1. **Vimeo link** — paste the video's `vimeo.com/…` link and click
+   **Add Vimeo link**. The app saves the link + its public title,
+   thumbnail, and length.
+2. **Video file** — click **🎬 Choose a video file…**, or just drop
+   the file anywhere in the app window. mp4, webm, or mov, up to
+   **500 MB**. The file is *streamed* into the app's data folder (it
+   is never loaded whole into memory).
+
+Either way you get a card in the **📋 SOPs from video** list.
+
+**What a link alone can and cannot do — plainly:** a link gives the
+app the title and thumbnail, *not* the recording. To analyze the
+recording itself from a link, the app needs the captions and/or a
+downloadable file from Vimeo's API, and that needs **your Vimeo
+access token**: **⚙ Settings → Vimeo access token** → paste → Save.
+(It's stored encrypted on this PC, like your API key, and sent only
+to Vimeo.) With a token, adding a link also fetches the captions and
+— when the video's owner has downloads enabled — the file itself.
+Without a token, add the video file (or a transcript file, next
+section) — the card will tell you exactly what's missing, and the app
+will **never** invent an SOP from a thumbnail.
+
+### 15b. Generate the SOP
+
+Click **✨ Generate SOP** on the card. The app:
+
+1. Samples frames from the recording — first frame, then every ~5
+   seconds, plus the last moment (at most 24 frames).
+2. Collects the transcript: Vimeo captions when a token fetched them,
+   or a transcript file you add with **📝 Add transcript file**
+   (.txt, .md, or .vtt). No transcript? The SOP is still written from
+   the frames, and it is **labeled** *"from video frames only (no
+   narration transcript)"* — on the card, in the export, everywhere.
+3. Asks Muse Spark to write the SOP in a fixed structure: **Goal**,
+   **What you need first**, numbered **Steps** (the exact action,
+   where/what exactly, the expected result), and **Watch-outs**.
+
+In **Mock mode** you get a clearly-labeled placeholder SOP built from
+your transcript sentences — useful for trying the flow, not a real
+analysis.
+
+**📄 View SOP** reads it in place; **⬇ Export .md** writes it to the
+Bridge Outbox.
+
+### 15c. Turn the SOP into a Loop
+
+Click **🔁 Turn into a Loop** on a generated SOP. The app builds a
+**draft Loop** and opens it in the Loop builder (Section 14):
+
+- "What you need first" becomes a **Note** step at the top;
+  "Watch-outs" become a **Note** at the bottom.
+- Each SOP step becomes a **Manual step** with its text (including the
+  expected result) preserved word for word — *except* a step that
+  unambiguously says **open <a URL>** or **create a file named X**:
+  those are pre-typed as **Desktop task** steps and flagged
+  **⚠ auto-converted — review**.
+- Review every step, convert or edit whatever you like, then **Save
+  loop**. The draft is **never auto-run** — it runs only when you run
+  it, under the normal approval rules.
+
+## 16. Where everything lives — the Bridge folder and logs
 
 By default the Bridge folder is in your **Documents**:
 
@@ -563,10 +710,12 @@ API key lives there too — encrypted by Windows, as Section 4 explains.
 So does the Vault file (`vault.json`) — a single blob encrypted with
 your master password, as Section 12 explains. It is never uploaded
 anywhere and never included in the code repo.
+So do your **Loops** (`loops.json`), your **SOPs** (`sops.json`), and
+any staged video files (`video-temp\`) — all local, all yours.
 Nothing in this app is uploaded anywhere except your chat messages going
 to Meta when you are in live mode.
 
-## 15. Troubleshooting
+## 17. Troubleshooting
 
 **"It says Mock mode / my answers start with [Mock mode…]"**
 You have not added an API key yet, or it was removed. **⚙ Settings** →
@@ -711,3 +860,31 @@ unit-tested with simulated probes) were verified on the build machine
 codes, and the copy/paste steps — the Windows guard probes on a real
 session (including switching to a second user account), and the portable
 .exe get their first live run on your PC.*
+
+**"Generate SOP is greyed out on my Vimeo link"**
+The link alone gives the app the video's title and thumbnail — not the
+recording. Add one of these, then the button enables: the **video file
+itself** (drop it in, or pick it with 🎬), a **Vimeo access token**
+(⚙ Settings — then re-add the link so captions + the file are
+fetched), or a **transcript file** (📝 Add transcript file on the
+card). The app will not fake an SOP from a thumbnail.
+
+**"My SOP says 'from video frames only (no narration transcript)'"**
+That recording had no captions the app could read and no transcript
+file was added, so the SOP was written from the sampled frames alone.
+For a fuller SOP, add the transcript (📝 button on the card — .txt,
+.md, or .vtt) or save a Vimeo token in Settings so captions are
+fetched automatically, then click **✨ Regenerate SOP**.
+
+**"A loop run stopped at a step and is asking me to Skip or Stop"**
+That's the approval system working: the step was denied or failed, so
+the run halted instead of guessing. Read the step's output in the
+checklist — **Skip this step & continue** keeps the step's
+denied/failed mark and moves on; **Stop the run** ends it there.
+Nothing after a denied step ran without you seeing it.
+
+**"My loop's Night Queue job parked as 'waiting on you'"**
+The loop reached a **Manual step** (or a fill against a locked vault,
+or a typing step while the screen was locked) — something only you can
+do. Do that step yourself in the morning, then run the loop from the
+🔁 Loops panel to finish it interactively.
