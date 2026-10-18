@@ -96,7 +96,13 @@ function addMessageToDom(role, content) {
   }
   const body = document.createElement('div');
   body.className = 'body';
-  renderRich(body, content);
+  // User bubbles show a compact "📄 name — attached document" line per
+  // attached file; the full document blocks stay in the stored/sent
+  // message (and in history), never dumped into the bubble.
+  const display = role === 'user' && window.MuseAttachments
+    ? window.MuseAttachments.collapseDocumentBlocks(content)
+    : content;
+  renderRich(body, display);
   wrap.appendChild(body);
   els.messages.appendChild(wrap);
   scrollToBottom();
@@ -274,47 +280,161 @@ function addTaskCard(action) {
 
 // ---------- chat ----------
 
-// Teach mode: at most one pending screenshot attachment for the next
-// message. { dataUrl, name } — the data URL lives only in this session's
-// memory and in a lesson IF the user explicitly saves it as one; chat
-// history stays text-only.
-let pendingAttachment = null;
+// Attachments (v0.3.4): any number of files staged for the next
+// message, ChatGPT-style — drag & drop anywhere in the window, paste,
+// or the 📎 picker. Each staged attachment is one of:
+//   { id, kind: 'image',    name, size, dataUrl }  — a vision-format
+//     screenshot; the data URL lives only in this session's memory
+//     and in a lesson IF the user explicitly saves it as one.
+//   { id, kind: 'document', name, size, text, truncated } — a text
+//     file's contents (capped at 100 KB); the text rides inside the
+//     outgoing message in a labeled document block, which is also how
+//     it is stored in history, so follow-up questions can use it.
+// Classification is the pure src/attachments.js module (loaded before
+// this script as window.MuseAttachments). A file that can be neither
+// is NEVER staged: the user gets an honest status note instead.
+const ATT = window.MuseAttachments;
+const MAX_PENDING_ATTACHMENTS = 6;
+const MAX_IMAGES_PER_MESSAGE = 4;
+let pendingAttachments = [];
+let attachmentSeq = 0;
 
-function showAttachmentChip() {
-  const chip = document.getElementById('attachment-chip');
-  if (!chip) return;
-  if (!pendingAttachment) {
-    chip.classList.add('hidden');
+function renderAttachmentChips() {
+  const row = document.getElementById('attachments-row');
+  if (!row) return;
+  row.innerHTML = '';
+  if (!pendingAttachments.length) {
+    row.classList.add('hidden');
     return;
   }
-  document.getElementById('attachment-thumb').src = pendingAttachment.dataUrl;
-  document.getElementById('attachment-name').textContent = pendingAttachment.name || 'screenshot';
-  chip.classList.remove('hidden');
+  row.classList.remove('hidden');
+  for (const att of pendingAttachments) {
+    const chip = document.createElement('div');
+    chip.className = 'attach-item';
+    chip.dataset.attId = String(att.id);
+    if (att.kind === 'image') {
+      const img = document.createElement('img');
+      img.className = 'attach-thumb';
+      img.src = att.dataUrl;
+      img.alt = att.name || 'Attached image';
+      chip.appendChild(img);
+    } else {
+      const icon = document.createElement('span');
+      icon.className = 'attach-doc-icon';
+      icon.textContent = '📄';
+      chip.appendChild(icon);
+    }
+    const meta = document.createElement('span');
+    meta.className = 'attach-meta';
+    const nameEl = document.createElement('span');
+    nameEl.className = 'attach-name';
+    nameEl.textContent = att.name || 'file';
+    meta.appendChild(nameEl);
+    const sub = document.createElement('span');
+    sub.className = 'attach-sub';
+    sub.textContent = att.kind === 'image'
+      ? `image · ${ATT.formatSize(att.size)}`
+      : `document · ${ATT.formatSize(att.size)}${att.truncated ? ' · first 100 KB sent' : ''}`;
+    meta.appendChild(sub);
+    chip.appendChild(meta);
+    const remove = document.createElement('button');
+    remove.className = 'attach-remove';
+    remove.textContent = '×';
+    remove.title = `Remove ${att.name || 'attachment'}`;
+    remove.addEventListener('click', () => {
+      pendingAttachments = pendingAttachments.filter((a) => a.id !== att.id);
+      renderAttachmentChips();
+      setStatus(`Removed ${att.name || 'attachment'}.`);
+    });
+    chip.appendChild(remove);
+    row.appendChild(chip);
+  }
 }
 
-function setPendingAttachment(attachment) {
-  pendingAttachment = attachment;
-  showAttachmentChip();
+function addPendingAttachment(att) {
+  att.id = ++attachmentSeq;
+  pendingAttachments.push(att);
+  renderAttachmentChips();
+  return att;
 }
 
-// Read an image File/Blob into a validated pending attachment.
-function readImageFile(file) {
-  if (!file) return;
-  if (!/^image\/(png|jpeg|webp)$/.test(file.type || '')) {
-    setStatus('That file is not a png, jpeg, or webp image — screenshots must be one of those.');
-    return;
+// Stage one image from a data URL (Lessons panel "attach screenshot").
+function stageImageDataUrl(dataUrl, name) {
+  addPendingAttachment({ kind: 'image', name: name || 'screenshot', size: 0, dataUrl });
+}
+
+function readAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error(`Could not read ${file.name || 'that file'}.`));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function readBlobBytes(blob, maxBytes) {
+  const buffer = await blob.slice(0, maxBytes).arrayBuffer();
+  return new Uint8Array(buffer);
+}
+
+// Stage one File. Returns an honest note string when the file could
+// not be attached, null when it staged.
+async function attachOneFile(file) {
+  if (!file) return null;
+  const label = file.name || 'that file';
+  if (pendingAttachments.length >= MAX_PENDING_ATTACHMENTS) {
+    return `"${label}" was not attached — at most ${MAX_PENDING_ATTACHMENTS} attachments per message. Remove one first.`;
   }
-  if (file.size > 8 * 1024 * 1024) {
-    setStatus('That image is over ~8 MB — take a smaller screenshot and try again.');
-    return;
+  let sample = null;
+  try {
+    sample = await readBlobBytes(file, ATT.SNIFF_BYTES);
+  } catch (_) { /* classification falls back to name + MIME only */ }
+  const cls = ATT.classifyFile({ name: file.name || '', type: file.type || '', size: file.size || 0, sample });
+  if (cls.kind === 'unsupported') {
+    return cls.message || `"${label}" can't be read yet, so it was not attached.`;
   }
-  const reader = new FileReader();
-  reader.onload = () => {
-    setPendingAttachment({ dataUrl: String(reader.result), name: file.name || 'pasted screenshot' });
-    setStatus('Screenshot attached — it will be sent with your next message.');
-  };
-  reader.onerror = () => setStatus('Could not read that image file.');
-  reader.readAsDataURL(file);
+  try {
+    if (cls.kind === 'image') {
+      if (pendingAttachments.filter((a) => a.kind === 'image').length >= MAX_IMAGES_PER_MESSAGE) {
+        return `"${label}" was not attached — at most ${MAX_IMAGES_PER_MESSAGE} images per message.`;
+      }
+      const dataUrl = await readAsDataUrl(file);
+      addPendingAttachment({ kind: 'image', name: file.name || 'pasted screenshot', size: file.size || 0, dataUrl });
+      return null;
+    }
+    const bytes = await readBlobBytes(file, ATT.DOC_CAP_BYTES);
+    const text = new TextDecoder('utf-8').decode(bytes);
+    addPendingAttachment({
+      kind: 'document',
+      name: file.name || 'document',
+      size: file.size || 0,
+      text,
+      truncated: (file.size || 0) > ATT.DOC_CAP_BYTES
+    });
+    return null;
+  } catch (err) {
+    return `"${label}" could not be read (${err.message}), so it was not attached.`;
+  }
+}
+
+// Stage a batch (drop / paste / picker). Attached files are confirmed
+// in the status line; refused files are named there too — nothing is
+// swallowed silently either way.
+async function attachFiles(files) {
+  const list = [...(files || [])];
+  if (!list.length) return;
+  const attached = [];
+  const notes = [];
+  for (const file of list) {
+    const before = pendingAttachments.length;
+    const note = await attachOneFile(file);
+    if (note) notes.push(note);
+    else if (pendingAttachments.length > before) attached.push(file.name || 'file');
+  }
+  const parts = [];
+  if (attached.length) parts.push(`Attached: ${attached.join(', ')} — sent with your next message.`);
+  parts.push(...notes);
+  if (parts.length) setStatus(parts.join(' '));
 }
 
 // "Save as lesson" inline form under a screenshot exchange. The image is
@@ -369,36 +489,49 @@ function addLessonSaveForm(wrap, attachment) {
 
 async function sendUserText(text) {
   let trimmed = (text || '').trim();
-  const attachment = pendingAttachment;
-  if (!trimmed && attachment) trimmed = 'What do you see in this screenshot?';
+  const attachments = pendingAttachments;
+  const images = attachments.filter((a) => a.kind === 'image');
+  const docs = attachments.filter((a) => a.kind === 'document');
+  if (!trimmed && attachments.length) {
+    trimmed = images.length && docs.length
+      ? 'Take a look at these attachments.'
+      : docs.length
+        ? 'Please read the attached document.'
+        : 'What do you see in this screenshot?';
+  }
   if (!trimmed || sending) return;
   sending = true;
   els.send.disabled = true;
-  if (attachment) setPendingAttachment(null);
+  pendingAttachments = [];
+  renderAttachmentChips();
 
-  // History stays text-only: the stored user message notes the screenshot
-  // but never carries image bytes. The image itself is sent only on the
-  // live API call below (and kept in this session for Save-as-lesson).
-  const storedContent = attachment ? `${trimmed}\n\n[📸 screenshot attached: ${attachment.name || 'screenshot'}]` : trimmed;
+  // The stored user message carries document contents inside labeled
+  // blocks (so follow-up questions can use them — they are part of the
+  // message Spark received) and a text marker per screenshot. Image
+  // bytes themselves are never stored: they are sent only on the live
+  // API call below (and kept in this session for Save-as-lesson).
+  let storedContent = trimmed;
+  for (const doc of docs) storedContent += `\n\n${ATT.buildDocumentBlock(doc)}`;
+  for (const img of images) storedContent += `\n\n[📸 screenshot attached: ${img.name || 'screenshot'}]`;
   messages.push({ role: 'user', content: storedContent });
   const userWrap = addMessageToDom('user', storedContent);
-  if (attachment) {
-    const img = document.createElement('img');
-    img.className = 'msg-shot';
-    img.alt = 'Screenshot sent with this message';
-    img.src = attachment.dataUrl;
-    userWrap.appendChild(img);
+  for (const img of images) {
+    const el = document.createElement('img');
+    el.className = 'msg-shot';
+    el.alt = 'Screenshot sent with this message';
+    el.src = img.dataUrl;
+    userWrap.appendChild(el);
   }
   await persist();
   setStatus('Muse Spark is thinking…');
 
   try {
     const apiMessages = messages.map((m) => ({ role: m.role, content: m.content }));
-    if (attachment) {
-      // Attach the image to the last user message for this call only.
+    if (images.length) {
+      // Attach the image(s) to the last user message for this call only.
       for (let i = apiMessages.length - 1; i >= 0; i--) {
         if (apiMessages[i].role === 'user') {
-          apiMessages[i] = { ...apiMessages[i], imageDataUrl: attachment.dataUrl };
+          apiMessages[i] = { ...apiMessages[i], imageDataUrls: images.map((img) => img.dataUrl) };
           break;
         }
       }
@@ -436,7 +569,7 @@ async function sendUserText(text) {
     messages.push({ role: 'assistant', content: cleanText });
     addMessageToDom('assistant', cleanText);
     await persist();
-    if (attachment) addLessonSaveForm(userWrap, attachment);
+    if (images.length) addLessonSaveForm(userWrap, images[0]);
     for (const action of actions) {
       // Resolve paths in main against the real OS folders first, so the
       // approval card shows the exact path that will run — the model may
@@ -1247,7 +1380,7 @@ async function renderLessons() {
         setStatus('That lesson’s screenshot file is missing on this PC.');
         return;
       }
-      setPendingAttachment({ dataUrl: url, name: `lesson: ${lesson.name}` });
+      stageImageDataUrl(url, `lesson: ${lesson.name}`);
       document.getElementById('lessons-panel').classList.add('hidden');
       setStatus(`Lesson screenshot attached: ${lesson.name} — type your message and Send.`);
       els.input.focus();
@@ -1306,41 +1439,73 @@ if (window.desktop.onUpdaterStatus) {
 
 // ---------- wire up ----------
 
-// Teach: attach via button / file picker, paste, and drag-drop.
+// Attachments (v0.3.4): 📎 picker, paste, and drag & drop anywhere in
+// the window — ChatGPT-style. While a file drag hovers the app a
+// full-window overlay shows; drag-leave depth tracking + Escape cancel
+// it; a drop stages every dropped file as chips above the composer.
 document.getElementById('attach-image').addEventListener('click', () => {
   document.getElementById('attach-file').click();
 });
 document.getElementById('attach-file').addEventListener('change', (e) => {
-  readImageFile(e.target.files && e.target.files[0]);
+  const files = e.target.files ? [...e.target.files] : [];
   e.target.value = '';
-});
-document.getElementById('attachment-remove').addEventListener('click', () => {
-  setPendingAttachment(null);
-  setStatus('Screenshot detached.');
+  if (files.length) attachFiles(files);
 });
 els.input.addEventListener('paste', (e) => {
-  const items = (e.clipboardData && e.clipboardData.items) || [];
-  for (const item of items) {
-    if (item.type && item.type.startsWith('image/')) {
-      readImageFile(item.getAsFile());
-      e.preventDefault();
-      return;
+  const data = e.clipboardData;
+  if (!data) return;
+  const files = [];
+  if (data.files && data.files.length) {
+    files.push(...data.files);
+  } else if (data.items) {
+    for (const item of data.items) {
+      if (item.kind === 'file') {
+        const file = item.getAsFile();
+        if (file) files.push(file);
+      }
     }
   }
+  if (files.length) {
+    e.preventDefault();
+    attachFiles(files);
+  }
 });
-for (const zone of [document.getElementById('composer-wrap'), els.messages]) {
-  if (!zone) continue;
-  zone.addEventListener('dragover', (e) => {
-    if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault();
-  });
-  zone.addEventListener('drop', (e) => {
-    const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-    if (file) {
-      e.preventDefault();
-      readImageFile(file);
-    }
-  });
+
+const dropOverlay = document.getElementById('drop-overlay');
+let dragDepth = 0;
+function dragHasFiles(e) {
+  return Boolean(e.dataTransfer && [...(e.dataTransfer.types || [])].includes('Files'));
 }
+function hideDropOverlay() {
+  dragDepth = 0;
+  if (dropOverlay) dropOverlay.classList.add('hidden');
+}
+window.addEventListener('dragenter', (e) => {
+  if (!dragHasFiles(e)) return;
+  dragDepth++;
+  if (dropOverlay) dropOverlay.classList.remove('hidden');
+});
+window.addEventListener('dragover', (e) => {
+  if (!dragHasFiles(e)) return;
+  e.preventDefault(); // required, or the drop never fires
+  if (dropOverlay) dropOverlay.classList.remove('hidden');
+});
+window.addEventListener('dragleave', () => {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0 && dropOverlay) dropOverlay.classList.add('hidden');
+});
+window.addEventListener('drop', (e) => {
+  if (!dragHasFiles(e)) return;
+  e.preventDefault(); // stop Electron navigating to the dropped file
+  const files = e.dataTransfer && e.dataTransfer.files ? [...e.dataTransfer.files] : [];
+  hideDropOverlay();
+  if (files.length) attachFiles(files);
+});
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && dropOverlay && !dropOverlay.classList.contains('hidden')) {
+    hideDropOverlay();
+  }
+});
 document.getElementById('toggle-lessons').addEventListener('click', () => {
   document.getElementById('lessons-panel').classList.toggle('hidden');
   renderLessons();

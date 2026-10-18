@@ -40,7 +40,7 @@
       <div class="side-section">
         <div class="side-heading"><span>Teach — screenshot lessons</span></div>
         <button id="toggle-lessons" class="side-btn">📸 Lessons</button>
-        <div class="side-note">Attach a screenshot to a chat message (paste, drag-drop, or the 📎 button) so Muse Spark can see your screen. Save an exchange as a lesson and it is remembered on this PC only — lessons never leave this machine except inside a chat you send.</div>
+        <div class="side-note">Attach screenshots or text documents to a chat message — drag &amp; drop files anywhere in the window, paste them, or use the 📎 button — so Muse Spark can see your screen or read the file. Save a screenshot exchange as a lesson and it is remembered on this PC only — lessons never leave this machine except inside a chat you send.</div>
       </div>
 
       <div class="side-section">
@@ -155,14 +155,10 @@
 
       <div id="composer-wrap">
         <div id="status-line"></div>
-        <div id="attachment-chip" class="attachment-chip hidden">
-          <img id="attachment-thumb" alt="Attached screenshot" />
-          <span id="attachment-name">screenshot</span>
-          <button id="attachment-remove" class="mini-btn">Remove</button>
-        </div>
+        <div id="attachments-row" class="attachments-row hidden"></div>
         <div id="composer">
-          <button id="attach-image" title="Attach a screenshot (or paste / drag-drop an image)">📎</button>
-          <input id="attach-file" type="file" accept="image/png,image/jpeg,image/webp" class="hidden" />
+          <button id="attach-image" title="Attach files — screenshots (png, jpeg, webp) or text documents. You can also drag &amp; drop files anywhere in this window, or paste them.">📎</button>
+          <input id="attach-file" type="file" multiple accept="image/png,image/jpeg,image/webp,.txt,.md,.json,.csv,.log,.xml,.html,.js,.ts,.py,text/plain" class="hidden" />
           <textarea id="input" rows="2" placeholder="Message Muse Spark…  (try: list my Downloads folder)"></textarea>
           <button id="send">Send</button>
         </div>
@@ -251,6 +247,11 @@
     </div>
   </div>
 
+  <div id="drop-overlay" class="drop-overlay hidden">
+    <div class="drop-overlay-card">📎<br />Drop files to attach</div>
+  </div>
+
+  <script src="../src/attachments.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

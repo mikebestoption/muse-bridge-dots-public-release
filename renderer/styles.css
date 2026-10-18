@@ -341,14 +341,52 @@ button:disabled { opacity: 0.5; cursor: default; }
   border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 15px;
 }
 
-/* Teach mode (v0.3.3) */
-.attachment-chip {
-  display: flex; gap: 10px; align-items: center;
-  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-  padding: 6px 10px; margin-bottom: 8px; max-width: 720px;
+/* Any element carrying .hidden is never shown. (Scoped rules like
+   .modal.hidden existed before; this generic rule is what keeps the
+   composer's native file input invisible — v0.3.3 shipped it visible
+   as a raw "Choose File" control.) */
+.hidden { display: none !important; }
+#attach-file { display: none; }
+
+/* Attachments (v0.3.4 — ChatGPT-style: drop anywhere, chips above the
+   composer, styled picker; the native file input is never visible). */
+.drop-overlay {
+  position: fixed; inset: 0; z-index: 300;
+  background: rgba(7, 188, 182, 0.13);
+  display: flex; align-items: center; justify-content: center;
+  /* Events stay with the window so dragleave/drop keep firing there;
+     the overlay is purely visual while a drag hovers the app. */
+  pointer-events: none;
 }
-.attachment-chip.hidden { display: none; }
-.attachment-chip img { width: 44px; height: 32px; object-fit: cover; border-radius: 6px; }
+.drop-overlay-card {
+  border: 3px dashed var(--accent); border-radius: 18px;
+  background: var(--panel); color: var(--text);
+  font-size: 26px; font-weight: 700; text-align: center;
+  padding: 44px 64px; line-height: 1.5;
+}
+.attachments-row {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  max-width: 1000px; margin: 0 auto 8px;
+}
+.attachments-row.hidden { display: none; }
+.attach-item {
+  display: flex; align-items: center; gap: 9px;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 6px 8px 6px 6px; max-width: 320px;
+}
+.attach-thumb { width: 44px; height: 34px; object-fit: cover; border-radius: 6px; flex: none; }
+.attach-doc-icon { font-size: 22px; line-height: 1; padding: 4px 2px; flex: none; }
+.attach-meta { display: flex; flex-direction: column; min-width: 0; }
+.attach-name {
+  font-size: 13.5px; font-weight: 600; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; max-width: 220px;
+}
+.attach-sub { color: var(--dim); font-size: 11.5px; white-space: nowrap; }
+.attach-remove {
+  background: transparent; border: none; color: var(--dim);
+  font-size: 17px; line-height: 1; cursor: pointer; padding: 3px 6px; flex: none;
+}
+.attach-remove:hover { color: var(--text); }
 .msg-shot { display: block; max-width: 420px; width: 100%; border-radius: 10px; margin-top: 8px; border: 1px solid var(--border); }
 .lesson-save { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; max-width: 520px; }
 .lesson-field {
