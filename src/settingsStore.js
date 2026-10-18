@@ -18,6 +18,7 @@ function createSettingsStore(userDataPath, safeStorage, defaultBridgePath) {
   const settingsFile = path.join(userDataPath, 'settings.json');
   let inMemoryKey = null; // only used when safeStorage is unavailable
   let inMemoryVimeoToken = null; // same treatment as the API key
+  let inMemoryGithubToken = null; // same treatment as the API key
 
   function readRaw() {
     try {
@@ -53,6 +54,7 @@ function createSettingsStore(userDataPath, safeStorage, defaultBridgePath) {
       hasKey: Boolean(raw.encryptedKey) || Boolean(inMemoryKey),
       keyPersisted: Boolean(raw.encryptedKey),
       hasVimeoToken: Boolean(raw.encryptedVimeoToken) || Boolean(inMemoryVimeoToken),
+      hasGithubToken: Boolean(raw.encryptedGithubToken) || Boolean(inMemoryGithubToken),
       encryptionAvailable: Boolean(safeStorage && safeStorage.isEncryptionAvailable())
     };
   }
@@ -89,8 +91,20 @@ function createSettingsStore(userDataPath, safeStorage, defaultBridgePath) {
     }
   }
 
+  function getGithubToken() {
+    if (inMemoryGithubToken) return inMemoryGithubToken;
+    const raw = readRaw();
+    if (!raw.encryptedGithubToken) return null;
+    if (!safeStorage || !safeStorage.isEncryptionAvailable()) return null;
+    try {
+      return safeStorage.decryptString(Buffer.from(raw.encryptedGithubToken, 'base64'));
+    } catch (_) {
+      return null;
+    }
+  }
+
   // apiKey: string to set, '' to leave unchanged is handled by caller passing null.
-  function save({ model, bridgePath, apiKey, vimeoToken, auditNightDefault, vaultAutoLockMinutes, handsIdleThresholdSeconds, handsMaxWaitMinutes }) {
+  function save({ model, bridgePath, apiKey, vimeoToken, githubToken, auditNightDefault, vaultAutoLockMinutes, handsIdleThresholdSeconds, handsMaxWaitMinutes }) {
     const raw = readRaw();
     if (typeof auditNightDefault === 'boolean') raw.auditNightDefault = auditNightDefault;
     if (Number.isFinite(vaultAutoLockMinutes) && vaultAutoLockMinutes >= 0) {
@@ -124,6 +138,15 @@ function createSettingsStore(userDataPath, safeStorage, defaultBridgePath) {
         inMemoryVimeoToken = vimeoToken;
       }
     }
+    if (typeof githubToken === 'string' && githubToken.length > 0) {
+      if (safeStorage && safeStorage.isEncryptionAvailable()) {
+        raw.encryptedGithubToken = safeStorage.encryptString(githubToken).toString('base64');
+        inMemoryGithubToken = null;
+      } else {
+        delete raw.encryptedGithubToken;
+        inMemoryGithubToken = githubToken;
+      }
+    }
     writeRaw(raw);
     return getPublicSettings();
   }
@@ -144,7 +167,15 @@ function createSettingsStore(userDataPath, safeStorage, defaultBridgePath) {
     return getPublicSettings();
   }
 
-  return { getPublicSettings, getModel, getBridgePath, getApiKey, getVimeoToken, save, clearKey, clearVimeoToken };
+  function clearGithubToken() {
+    const raw = readRaw();
+    delete raw.encryptedGithubToken;
+    inMemoryGithubToken = null;
+    writeRaw(raw);
+    return getPublicSettings();
+  }
+
+  return { getPublicSettings, getModel, getBridgePath, getApiKey, getVimeoToken, getGithubToken, save, clearKey, clearVimeoToken, clearGithubToken };
 }
 
 module.exports = { createSettingsStore, ALLOWED_MODELS, DEFAULT_MODEL };
