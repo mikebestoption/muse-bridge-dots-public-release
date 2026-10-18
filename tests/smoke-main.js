@@ -16,6 +16,14 @@
 //      the native file input is invisible, the drop overlay shows on
 //      dragenter and cancels on Escape, and a simulated drop stages a
 //      document chip (and refuses a binary with an honest note).
+//   6. v0.4.0 Loops + Teach-from-video: core modules load in the
+//      renderer; a loop with prompt/instruction/note steps is created
+//      via the real store, reordered in the builder UI, saved, and run
+//      in mock mode to completion (instruction step via its Done tap);
+//      a fixture video file is staged via the real streamed copy, a
+//      mock SOP is generated from a transcript, converted into a draft
+//      loop, and exported; the frame sampler fails honestly on the
+//      non-video fixture instead of faking frames.
 // Prints SMOKE PASS and exits 0, or SMOKE FAIL and exits 1.
 
 const fs = require('fs');
@@ -217,6 +225,111 @@ const ATTACH_SCRIPT = `
 })()
 `;
 
+// v0.4.0: Loops + SOP end-to-end in the real app (mock mode). Runs after
+// ATTACH_SCRIPT. Throws (failing the smoke) on the first violation.
+const LOOPS_SCRIPT = `
+(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const checks = [];
+  if (!window.MuseLoopsCore) throw new Error('window.MuseLoopsCore missing — src/loopsCore.js did not load');
+  if (!window.MuseLoopRunner) throw new Error('window.MuseLoopRunner missing — src/loopRunner.js did not load');
+  if (!window.MuseSopCore) throw new Error('window.MuseSopCore missing — src/sopCore.js did not load');
+  checks.push('loops + sop core modules loaded in renderer');
+
+  // Create a loop with three step types through the real IPC store.
+  const created = await window.desktop.loopsCreate({
+    name: 'Smoke loop',
+    description: 'Built by the smoke test.',
+    steps: [
+      { type: 'note', text: 'smoke note' },
+      { type: 'prompt', text: 'Say hello to the smoke test.' },
+      { type: 'instruction', text: 'Press Done to finish the smoke loop.' }
+    ]
+  });
+  if (!created.ok) throw new Error('loopsCreate failed: ' + created.error);
+  checks.push('loop created through the real IPC store');
+
+  // Open the Loops panel; the list shows the loop and the Night Queue
+  // loop picker is populated.
+  document.getElementById('toggle-loops').click();
+  await sleep(500);
+  const panel = document.getElementById('loops-panel');
+  if (panel.classList.contains('hidden')) throw new Error('loops panel did not open');
+  if (!document.getElementById('loops-list-view').innerText.includes('Smoke loop')) throw new Error('loop missing from the list view');
+  const nightSel = document.getElementById('night-loop-select');
+  if (![...nightSel.options].some((o) => o.value === created.loop.id)) throw new Error('night queue loop picker not populated');
+  checks.push('loops panel lists the loop; night-queue loop picker populated');
+
+  // Builder: open the loop, reorder step 1 down, save.
+  openLoopBuilder(created.loop);
+  await sleep(500);
+  let stepCards = document.querySelectorAll('#loops-builder-view .loop-step');
+  if (stepCards.length !== 3) throw new Error('builder did not render 3 step cards (got ' + stepCards.length + ')');
+  const firstType = () => document.querySelector('#loops-builder-view .loop-step .loop-step-head select').value;
+  if (firstType() !== 'note') throw new Error('first step should start as note, got ' + firstType());
+  const headBtns = stepCards[0].querySelectorAll('.loop-step-head button');
+  headBtns[1].click(); // the down button (up is disabled at index 0)
+  await sleep(500);
+  if (firstType() !== 'prompt') throw new Error('reorder failed: first step is ' + firstType());
+  checks.push('builder renders steps; reorder works');
+  const saveBtn = [...document.querySelectorAll('#loops-builder-view button')].find((b) => b.textContent.includes('Save loop'));
+  if (!saveBtn) throw new Error('builder Save button missing');
+  saveBtn.click();
+  await sleep(500);
+  checks.push('builder saved the reordered loop');
+
+  // Run it in mock mode: prompt answers, instruction waits for Done.
+  const runBtn = [...document.querySelectorAll('#loops-list-view button')].find((b) => b.textContent.includes('Run'));
+  if (!runBtn) throw new Error('list Run button missing');
+  runBtn.click();
+  await sleep(600);
+  let doneBtn = null;
+  for (let i = 0; i < 30 && !doneBtn; i++) {
+    doneBtn = [...document.querySelectorAll('#loops-run-view button')].find((b) => b.textContent.includes('Done'));
+    if (!doneBtn) await sleep(300);
+  }
+  if (!doneBtn) throw new Error('instruction step never asked for its Done tap');
+  doneBtn.click();
+  let runStatus = '';
+  for (let i = 0; i < 30; i++) {
+    await sleep(300);
+    runStatus = document.querySelector('#loops-run-view .drawer-sub') ? document.querySelector('#loops-run-view .drawer-sub').textContent : '';
+    if (runStatus.includes('Run done')) break;
+  }
+  if (!runStatus.includes('Run done')) throw new Error('loop run did not finish done: ' + runStatus);
+  const icons = [...document.querySelectorAll('#loops-run-view .loop-step-icon')].map((el) => el.textContent);
+  if (icons.length !== 3 || icons.some((t) => t !== '✓')) throw new Error('checklist icons wrong: ' + icons.join(','));
+  checks.push('loop ran to completion in mock mode (prompt + instruction via Done tap)');
+
+  // SOP circuit: stage the fixture video (bytes are NOT a real video),
+  // generate a labeled mock SOP from a transcript, convert to a Loop,
+  // export — and the frame sampler must fail honestly on the fixture.
+  const staged = await window.desktop.videoStageFile(window.__SMOKE_VIDEO_PATH);
+  if (!staged.ok) throw new Error('videoStageFile failed: ' + staged.error);
+  if (!staged.record.stagedId) throw new Error('intake record carries no stagedId');
+  checks.push('video file staged via streamed copy; intake record created');
+  const gen = await window.desktop.sopGenerate({
+    recordId: staged.record.id, frames: [],
+    transcriptText: 'Open the app. Click Fills. Save the form.'
+  });
+  if (!gen.ok) throw new Error('sopGenerate failed: ' + gen.error);
+  if (gen.mode !== 'mock') throw new Error('expected the mock SOP path in smoke, got mode ' + gen.mode);
+  if (gen.record.status !== 'generated' || !gen.record.markdown.includes('SOP')) throw new Error('generated SOP record incomplete');
+  checks.push('mock SOP generated from transcript, saved with markdown');
+  let samplerFailed = false;
+  try { await sampleVideoFrames('muse-video://local/' + staged.record.stagedId); } catch (_) { samplerFailed = true; }
+  if (!samplerFailed) throw new Error('frame sampler should fail honestly on a non-video fixture');
+  checks.push('frame sampler fails honestly on an unreadable video (no faked frames)');
+  const conv = await window.desktop.sopToLoop(staged.record.id);
+  if (!conv.ok) throw new Error('sopToLoop failed: ' + conv.error);
+  if (!conv.loop.name.includes('(from SOP)')) throw new Error('converted loop misnamed: ' + conv.loop.name);
+  const exported = await window.desktop.sopsExport(staged.record.id);
+  if (!exported.ok) throw new Error('sopsExport failed: ' + exported.error);
+  checks.push('SOP converted into a draft Loop and exported to the Outbox');
+  return checks;
+})()
+`;
+
 // v0.3.2: small-viewport panel layout assertions. Run after PAGE_SCRIPT at
 // each window size; throws (failing the smoke) on the first violation.
 const LAYOUT_SCRIPT = `
@@ -258,6 +371,7 @@ const LAYOUT_SCRIPT = `
     { open: 'toggle-audits', panel: 'audits-panel', close: 'close-audits', name: 'Audits' },
     { open: 'toggle-vault', panel: 'vault-panel', close: 'close-vault', name: 'Vault' },
     { open: 'toggle-terminals', panel: 'terminals-panel', close: 'close-terminals', name: 'Terminals' },
+    { open: 'toggle-loops', panel: 'loops-panel', close: 'close-loops', name: 'Loops' },
     { open: 'toggle-night', panel: 'night-panel', close: 'close-night', name: 'Night Queue' }
   ];
   for (const d of drawers) {
@@ -304,6 +418,14 @@ app.whenReady().then(async () => {
     // overlay show/Escape, simulated drop staging + chip removal).
     const attachChecks = await win.webContents.executeJavaScript(ATTACH_SCRIPT);
     for (const c of attachChecks) console.log('  ✓', c);
+    // v0.4.0: Loops + SOP circuit. The fixture "video" is deliberately
+    // not a real video: staging must still work (streamed copy is
+    // content-agnostic) and the sampler must fail honestly on it.
+    const fixtureVideo = path.join(tmp, 'smoke-clip.mp4');
+    fs.writeFileSync(fixtureVideo, Buffer.from('not-a-real-video-fixture'));
+    await win.webContents.executeJavaScript(`window.__SMOKE_VIDEO_PATH = ${JSON.stringify(fixtureVideo)}; true;`);
+    const loopChecks = await win.webContents.executeJavaScript(LOOPS_SCRIPT);
+    for (const c of loopChecks) console.log('  ✓', c);
     // v0.3.2: panel layout at desktop and small/scaled window sizes.
     for (const [w, h] of [[1280, 720], [1024, 640]]) {
       win.setSize(w, h);
