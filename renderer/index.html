@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:;" />
+  <title>Muse Bridge</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div class="brand">
+        <div class="brand-mark">✦</div>
+        <div>
+          <div class="brand-name">Muse Bridge</div>
+          <div class="brand-sub">Muse Spark · Desktop · Dot</div>
+        </div>
+      </div>
+
+      <div id="mode-banner" class="mode-banner mock">Mock mode</div>
+
+      <button id="new-chat" class="side-btn primary">+ New chat</button>
+      <button id="open-settings" class="side-btn">⚙ Settings</button>
+      <button id="toggle-terminals" class="side-btn">🖥 Terminals</button>
+      <button id="toggle-night" class="side-btn">🌙 Night Queue <span id="night-badge" class="badge">OFF</span></button>
+
+      <div class="side-section">
+        <div class="side-heading"><span>Clipboard bridge</span></div>
+        <button id="import-clipboard" class="side-btn">⬇ Import from clipboard</button>
+        <button id="copy-for-chatgpt" class="side-btn">⬆ Copy for ChatGPT</button>
+        <div class="side-note">Fast path: copy a ChatGPT answer, import it here for review. Copy for ChatGPT puts my last answer on your clipboard as a paste-ready "verify this" brief.</div>
+      </div>
+
+      <div class="side-section">
+        <div class="side-heading"><span>Vault</span><span id="vault-badge" class="badge">LOCKED</span></div>
+        <button id="toggle-vault" class="side-btn">🔐 Open Vault panel</button>
+        <div class="side-note">Your passwords + authenticator secrets, encrypted on this PC with a master password only you know. Muse Spark only ever sees entry names — the app fills logins and 2FA codes from the vault so you don't have to.</div>
+      </div>
+
+      <div class="side-section">
+        <div class="side-heading"><span>Teach — screenshot lessons</span></div>
+        <button id="toggle-lessons" class="side-btn">📸 Lessons</button>
+        <div class="side-note">Attach a screenshot to a chat message (paste, drag-drop, or the 📎 button) so Muse Spark can see your screen. Save an exchange as a lesson and it is remembered on this PC only — lessons never leave this machine except inside a chat you send.</div>
+      </div>
+
+      <div class="side-section">
+        <div class="side-heading"><span>Dot test runner</span></div>
+        <button id="open-dot-test" class="side-btn">🧪 Run tests with Dot</button>
+        <div class="side-note">Builds a test packet, sends it to Dot (clipboard or Outbox), and logs Dot's verdicts back here + to test-log.md in the Bridge folder.</div>
+      </div>
+
+      <div class="side-section">
+        <div class="side-heading"><span>Audits — Dot's queue</span><span id="audit-badge-side" class="badge hidden-badge">0</span></div>
+        <button id="toggle-audits" class="side-btn">🔍 Open Audits panel</button>
+        <button id="flag-last-audit" class="side-btn">🚩 Flag last answer: NEEDS DOT AUDIT</button>
+        <div class="side-note">Flagging a result puts it in Dot's audit queue with a badge Muse can see, and auto-packages the verify-this packet for Dot.</div>
+      </div>
+
+      <div class="side-section">
+        <div class="side-heading">
+          <span>Bridge — Inbox</span>
+          <button id="refresh-inbox" class="mini-btn" title="Refresh Inbox">↻</button>
+        </div>
+        <div class="bridge-path" id="bridge-path"></div>
+        <div id="inbox-list" class="inbox-list"></div>
+        <button id="open-bridge-folder" class="side-btn">Open Bridge folder</button>
+        <button id="package-chatgpt" class="side-btn">📦 Package for ChatGPT</button>
+        <button id="package-Muse" class="side-btn">📦 Package for Muse</button>
+        <div class="side-note">Durable path: drop ChatGPT results (.md / .txt / .json) into Inbox, click one to import it. Packaged handoffs land in Outbox.</div>
+      </div>
+    </aside>
+
+    <main id="main">
+      <div id="chat-header">
+        <span class="chat-title">Muse</span>
+        <span id="audit-badge-chat" class="badge hidden-badge">🔍 0 NEED DOT AUDIT</span>
+        <span class="grow"></span>
+        <span class="chat-sub">Dot audits what you flag — statuses ride on every result, job and terminal.</span>
+      </div>
+      <div id="messages"></div>
+
+      <section id="audits-panel" class="drawer hidden">
+        <div class="drawer-head">
+          <strong>🔍 Audits — what Dot needs to check</strong>
+          <span id="audit-badge-terminals" class="badge hidden-badge">0 waiting</span>
+          <span class="drawer-sub">This list is how Muse KNOWS Dot has work waiting. Package sends the verify-this packet to Dot; verdicts imported back flip the status and attach to the original item; failed items become a fix job in one click.</span>
+          <span class="grow"></span>
+          <button id="close-audits" class="mini-btn large">Close</button>
+        </div>
+        <div id="audits-list" class="drawer-body"></div>
+      </section>
+
+      <section id="lessons-panel" class="drawer hidden">
+        <div class="drawer-head">
+          <strong>📸 Teach lessons</strong>
+          <span class="drawer-sub">Screenshots + your words about what they show and what to do. Stored only on this PC (userData). Lesson notes ride along as context in later chats; a lesson's screenshot is only sent when you attach it or send that lesson in a chat. Lessons can suggest actions — every step still goes through the normal approval cards. Teach mode never clicks anything by itself.</span>
+          <span class="grow"></span>
+          <button id="close-lessons" class="mini-btn large">Close</button>
+        </div>
+        <div id="lessons-list" class="drawer-body"></div>
+      </section>
+
+      <section id="vault-panel" class="drawer hidden">
+        <div class="drawer-head">
+          <strong>🔐 Vault</strong>
+          <span class="drawer-sub">Encrypted with your master password (AES-256-GCM, scrypt). The master password is NOT recoverable — if you forget it, the vault's contents are lost. That is by design. Passwords never appear in chat, history, packets, or logs.</span>
+          <span class="grow"></span>
+          <button id="close-vault" class="mini-btn large">Close</button>
+        </div>
+        <div id="vault-body" class="drawer-body"></div>
+      </section>
+
+      <section id="terminals-panel" class="drawer hidden">
+        <div class="drawer-head">
+          <strong>Terminals</strong>
+          <span class="drawer-sub">Each session: its own role, working folder, job queue and log. Shell jobs ask for approval in their own panel before running.</span>
+          <span class="grow"></span>
+          <button id="add-terminal" class="mini-btn large">+ New session</button>
+          <button id="close-terminals" class="mini-btn large">Close</button>
+        </div>
+        <div id="terminals-list" class="drawer-body"></div>
+      </section>
+
+      <section id="night-panel" class="drawer hidden">
+        <div class="drawer-head">
+          <strong>🌙 Night Queue</strong>
+          <span class="drawer-sub">Default OFF. Assemble jobs, read the full list, then tap Approve — only those exact jobs run, in order. Anything outside the list stops the queue for you.</span>
+          <span class="grow"></span>
+          <button id="close-night" class="mini-btn large">Close</button>
+        </div>
+        <div class="drawer-body">
+          <div class="night-add row">
+            <select id="night-job-type">
+              <option value="chat">Chat job</option>
+              <option value="shell">Shell job (exact command)</option>
+              <option value="dot-test">Dot test job</option>
+              <option value="fill_login">Fill login (job text = vault entry label)</option>
+              <option value="fill_totp">Fill 2FA code (job text = vault entry label)</option>
+              <option value="wait_for_user">Wait for me (job text = reason, e.g. security key)</option>
+            </select>
+            <input id="night-job-text" type="text" placeholder="Job text — command, prompt, vault entry label, or wait reason" />
+            <input id="night-job-folder" type="text" placeholder="Folder (shell) or window title (fill jobs, optional)" />
+            <button id="night-add-job" class="mini-btn large">Add job</button>
+          </div>
+          <ol id="night-jobs" class="night-jobs"></ol>
+          <div id="night-summary" class="night-summary"></div>
+        </div>
+        <div class="row drawer-foot">
+          <button id="night-approve" class="approve-big">Approve this queue &amp; run it</button>
+          <button id="night-stop" class="mini-btn large" disabled>Stop queue</button>
+          <button id="night-clear" class="mini-btn large">Clear finished</button>
+          <span id="night-status" class="drawer-sub"></span>
+        </div>
+      </section>
+
+      <div id="composer-wrap">
+        <div id="status-line"></div>
+        <div id="attachment-chip" class="attachment-chip hidden">
+          <img id="attachment-thumb" alt="Attached screenshot" />
+          <span id="attachment-name">screenshot</span>
+          <button id="attachment-remove" class="mini-btn">Remove</button>
+        </div>
+        <div id="composer">
+          <button id="attach-image" title="Attach a screenshot (or paste / drag-drop an image)">📎</button>
+          <input id="attach-file" type="file" accept="image/png,image/jpeg,image/webp" class="hidden" />
+          <textarea id="input" rows="2" placeholder="Message Muse Spark…  (try: list my Downloads folder)"></textarea>
+          <button id="send">Send</button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <div id="dot-modal" class="modal hidden">
+    <div class="modal-card">
+      <h2>Run tests with Dot</h2>
+      <div class="modal-body">
+        <label class="field-label" for="dot-what">What should Dot test?</label>
+        <textarea id="dot-what" rows="3" placeholder="e.g. Check the totals and dates in the last result above"></textarea>
+        <div class="field-note">The packet includes the current conversation as the material to test, with What to check / Where / Expected result, and asks Dot to reply in CLAIM | RESULT | EVIDENCE lines.</div>
+        <div class="field-note">After Dot answers in ChatGPT: use “Import from clipboard” or import Dot's file from the Inbox, then choose “Log as Dot test result” when asked — verdicts are written to the chat and to test-log.md.</div>
+      </div>
+      <div class="modal-foot">
+        <div class="row modal-actions">
+          <button id="dot-export">Export packet to Outbox</button>
+          <button id="dot-copy">Copy packet for Dot</button>
+        </div>
+        <div class="row modal-actions">
+          <button id="dot-simulate">Simulate Dot run (mock)</button>
+          <span class="grow"></span>
+          <button id="dot-close">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="settings-modal" class="modal hidden">
+    <div class="modal-card">
+      <h2>Settings</h2>
+
+      <div class="modal-body">
+      <label class="field-label" for="api-key">Meta Model API key</label>
+      <input id="api-key" type="password" placeholder="Paste key from dev.meta.ai" autocomplete="off" />
+      <div class="field-note" id="key-note">Stored only on this PC, encrypted by your operating system. Never sent anywhere except api.meta.ai.</div>
+
+      <label class="field-label" for="model">Model</label>
+      <select id="model">
+        <option value="muse-spark-1.3">muse-spark-1.3</option>
+        <option value="muse-spark-1.1">muse-spark-1.1</option>
+      </select>
+
+      <label class="field-label" for="audit-night-default">Dot audit — Night Queue default</label>
+      <div class="row">
+        <input id="audit-night-default" type="checkbox" />
+        <span class="field-note" style="margin:0">New Night Queue jobs are flagged NEEDS DOT AUDIT by default (you can toggle each job in the queue list).</span>
+      </div>
+
+      <label class="field-label" for="vault-autolock">Vault auto-lock (minutes of inactivity, 0 = never)</label>
+      <input id="vault-autolock" type="number" min="0" max="240" step="1" />
+      <div class="field-note">When the vault auto-locks, fills stop and Night Queue fill jobs park as "waiting on you" until you unlock it again.</div>
+
+      <label class="field-label" for="hands-idle-threshold">Hands idle threshold (seconds)</label>
+      <input id="hands-idle-threshold" type="number" min="5" max="600" step="1" />
+      <div class="field-note">Before the app types anything (paste to an app, fill a login, fill a 2FA code) in the Night Queue, it waits until you have not touched the mouse or keyboard for this long. While you are using the PC, hands steps wait — they never type over you. Steps you approve by hand only ever wait for a 3-second hands-off countdown.</div>
+
+      <label class="field-label" for="hands-max-wait">Hands max wait (minutes)</label>
+      <input id="hands-max-wait" type="number" min="1" max="240" step="1" />
+      <div class="field-note">If you are still using the PC after waiting this long, the hands step parks as "waiting on you" (reason: user active on the PC) and the Night Queue moves on with its other jobs. If the screen is locked or the session is switched to another user, hands steps park immediately instead of waiting.</div>
+
+      <label class="field-label">Bridge folder</label>      <div class="row">
+        <div id="settings-bridge-path" class="bridge-path grow"></div>
+        <button id="choose-bridge" class="mini-btn large">Change…</button>
+      </div>
+
+      <label class="field-label">Updates</label>
+      <div class="row">
+        <span class="field-note" style="margin:0">Muse Bridge <span id="app-version"></span> — updates come from the public GitHub Releases feed. Downloaded updates install only when you click Restart to update; your key, Vault and history are never touched.</span>
+      </div>
+      <div class="row">
+        <button id="check-updates" class="mini-btn large">Check for updates</button>
+        <button id="install-update" class="mini-btn large hidden">Restart to update</button>
+        <span id="update-status" class="field-note" style="margin:0"></span>
+      </div>
+      </div>
+
+      <div class="row modal-actions modal-foot">
+        <button id="clear-key" class="danger">Remove key</button>
+        <span class="grow"></span>
+        <button id="close-settings">Cancel</button>
+        <button id="save-settings" class="primary">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

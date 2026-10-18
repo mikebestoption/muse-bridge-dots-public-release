@@ -1,0 +1,66 @@
+{
+  "author": "Michael Rodriguez",
+  "description": "Muse Bridge \u2014 Muse Spark desktop app: chat with Muse Spark, run approval-gated desktop tasks, and bridge results between ChatGPT (Dot) and Muse via clipboard + a shared Bridge folder.",
+  "license": "Apache-2.0",
+  "main": "main.js",
+  "name": "muse-bridge",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mikebestoption/muse-bridge-dots-public-release.git"
+  },
+  "scripts": {
+    "start": "electron .",
+    "check": "for f in main.js preload.js src/*.js renderer/*.js tests/*.js scripts/*.js; do node --check \"$f\" || exit 1; done && echo ALL FILES SYNTAX OK",
+    "test": "node tests/pathResolver.test.js && node tests/sessionGuard.test.js && node tests/vault.test.js && node tests/totp.test.js && node tests/noSecrets.test.js && node tests/regression.test.js && node tests/updater.test.js && node tests/lessons.test.js && node tests/sparkVision.test.js",
+    "smoke": "xvfb-run -a npx electron tests/smoke-main.js",
+    "dist": "electron-builder --win",
+    "dist:linux": "electron-builder --linux zip",
+    "scrub": "node scripts/scrub-audit.js"
+  },
+  "version": "0.3.3",
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.michael.musebridge",
+    "productName": "Muse Bridge",
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**",
+      "renderer/**",
+      "package.json",
+      "LICENSE"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "portable": {
+      "artifactName": "MuseBridge-${version}-portable.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "MuseBridge-${version}-setup.${ext}",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Muse Bridge"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "mikebestoption",
+        "repo": "muse-bridge-dots-public-release",
+        "releaseType": "release"
+      }
+    ]
+  }
+}

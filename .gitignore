@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+out/
+*.7z
+
+# Local app data — never commit settings, history, sessions or key material
+settings.json
+vault.json
+history.json
+sessions.json
+nightQueue.json
+audits.json
+*.log
+test-log.md
+
+# Bridge folder content (packets/logs are user data, not source)
+MuseBridge/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
