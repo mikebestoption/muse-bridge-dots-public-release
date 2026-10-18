@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:;" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; media-src 'self' blob: muse-video:;" />
   <title>Muse Bridge</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -22,6 +22,7 @@
       <button id="new-chat" class="side-btn primary">+ New chat</button>
       <button id="open-settings" class="side-btn">⚙ Settings</button>
       <button id="toggle-terminals" class="side-btn">🖥 Terminals</button>
+      <button id="toggle-loops" class="side-btn">🔁 Loops</button>
       <button id="toggle-night" class="side-btn">🌙 Night Queue <span id="night-badge" class="badge">OFF</span></button>
 
       <div class="side-section">
@@ -38,9 +39,14 @@
       </div>
 
       <div class="side-section">
-        <div class="side-heading"><span>Teach — screenshot lessons</span></div>
-        <button id="toggle-lessons" class="side-btn">📸 Lessons</button>
-        <div class="side-note">Attach screenshots or text documents to a chat message — drag &amp; drop files anywhere in the window, paste them, or use the 📎 button — so Muse Spark can see your screen or read the file. Save a screenshot exchange as a lesson and it is remembered on this PC only — lessons never leave this machine except inside a chat you send.</div>
+        <div class="side-heading"><span>Teach — lessons &amp; video SOPs</span></div>
+        <button id="toggle-lessons" class="side-btn">📸 Lessons &amp; SOPs</button>
+        <div class="side-note">Attach screenshots or text documents to a chat message — drag &amp; drop files anywhere in the window, paste them, or use the 📎 button — so Muse Spark can see your screen or read the file. Save a screenshot exchange as a lesson and it is remembered on this PC only. Or hand the app a Vimeo link / video recording of you doing a task and it writes an SOP from it — then turns the SOP into a Loop.</div>
+      </div>
+
+      <div class="side-section">
+        <div class="side-heading"><span>Loops — workflows</span></div>
+        <div class="side-note">Build a workflow once, step by step (prompts, desktop tasks, vault fills, manual steps, notes), document it, and run it any time from the 🔁 Loops panel — or overnight as a Night Queue job.</div>
       </div>
 
       <div class="side-section">
@@ -97,7 +103,26 @@
           <span class="grow"></span>
           <button id="close-lessons" class="mini-btn large">Close</button>
         </div>
-        <div id="lessons-list" class="drawer-body"></div>
+        <div class="drawer-body">
+          <div id="teach-video-box" class="teach-video-box">
+            <div class="v-form-title">🎬 Teach from video — turn a recording into an SOP</div>
+            <div class="side-note">Paste a Vimeo link (that's what you use), or drop / pick a video file (mp4, webm, mov — up to 500 MB). The app samples frames from the recording and asks Muse Spark to write an SOP: exactly what to click, open, and do, step by step. A Vimeo link on its own saves the link + public title only — the recording itself is analyzed from the video file, or from the link when a Vimeo access token is saved in Settings. An SOP can then become a Loop.</div>
+            <div class="row">
+              <input id="vimeo-url" type="text" placeholder="Paste a Vimeo link — vimeo.com/…" />
+              <button id="vimeo-add" class="mini-btn large">Add Vimeo link</button>
+            </div>
+            <div class="row">
+              <button id="video-pick" class="mini-btn large">🎬 Choose a video file…</button>
+              <input id="teach-video-file" type="file" accept="video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov,.m4v" class="hidden" />
+              <span class="side-note" style="margin:0">…or drop a video file anywhere in this window.</span>
+            </div>
+            <div id="video-status" class="side-note"></div>
+          </div>
+          <h3 class="sop-heading">📋 SOPs from video</h3>
+          <div id="sops-list"></div>
+          <h3 class="sop-heading">📸 Screenshot lessons</h3>
+          <div id="lessons-list"></div>
+        </div>
       </section>
 
       <section id="vault-panel" class="drawer hidden">
@@ -132,12 +157,14 @@
           <div class="night-add row">
             <select id="night-job-type">
               <option value="chat">Chat job</option>
+              <option value="loop">Loop (a whole workflow)</option>
               <option value="shell">Shell job (exact command)</option>
               <option value="dot-test">Dot test job</option>
               <option value="fill_login">Fill login (job text = vault entry label)</option>
               <option value="fill_totp">Fill 2FA code (job text = vault entry label)</option>
               <option value="wait_for_user">Wait for me (job text = reason, e.g. security key)</option>
             </select>
+            <select id="night-loop-select" class="hidden"></select>
             <input id="night-job-text" type="text" placeholder="Job text — command, prompt, vault entry label, or wait reason" />
             <input id="night-job-folder" type="text" placeholder="Folder (shell) or window title (fill jobs, optional)" />
             <button id="night-add-job" class="mini-btn large">Add job</button>
@@ -151,6 +178,23 @@
           <button id="night-clear" class="mini-btn large">Clear finished</button>
           <span id="night-status" class="drawer-sub"></span>
         </div>
+      </section>
+
+      <section id="loops-panel" class="drawer hidden">
+        <div class="drawer-head">
+          <strong>🔁 Loops</strong>
+          <span class="drawer-sub">Reusable workflows, built step by step like n8n: prompts to Muse Spark, desktop tasks, vault fills, manual steps, and notes. Running a loop shows each step as it goes — task and fill steps still go through their own approval cards; a loop never bypasses approvals. Run one overnight by adding it to the Night Queue.</span>
+          <span class="grow"></span>
+          <button id="loops-new" class="mini-btn large">+ New loop</button>
+          <button id="close-loops" class="mini-btn large">Close</button>
+        </div>
+        <div class="drawer-body">
+          <div id="loops-list-view"></div>
+          <div id="loops-builder-view" class="hidden"></div>
+          <div id="loops-doc-view" class="hidden"></div>
+          <div id="loops-run-view" class="hidden"></div>
+        </div>
+        <datalist id="vault-label-list"></datalist>
       </section>
 
       <div id="composer-wrap">
@@ -197,6 +241,13 @@
       <label class="field-label" for="api-key">Meta Model API key</label>
       <input id="api-key" type="password" placeholder="Paste key from dev.meta.ai" autocomplete="off" />
       <div class="field-note" id="key-note">Stored only on this PC, encrypted by your operating system. Never sent anywhere except api.meta.ai.</div>
+
+      <label class="field-label" for="vimeo-token">Vimeo access token (optional — for Teach from video)</label>
+      <input id="vimeo-token" type="password" placeholder="Paste token from your Vimeo app settings" autocomplete="off" />
+      <div class="field-note" id="vimeo-note">Lets the app read captions and downloadable files from YOUR Vimeo recordings so a pasted link can be analyzed. Stored only on this PC, encrypted by your operating system, exactly like your API key — and never sent anywhere except api.vimeo.com. Without it, a Vimeo link saves its title/thumbnail only; add the video file itself to analyze the recording.</div>
+      <div class="row">
+        <button id="clear-vimeo" class="danger">Remove Vimeo token</button>
+      </div>
 
       <label class="field-label" for="model">Model</label>
       <select id="model">
@@ -252,6 +303,9 @@
   </div>
 
   <script src="../src/attachments.js"></script>
+  <script src="../src/loopsCore.js"></script>
+  <script src="../src/sopCore.js"></script>
+  <script src="../src/loopRunner.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

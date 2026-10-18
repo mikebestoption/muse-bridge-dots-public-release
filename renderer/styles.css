@@ -403,3 +403,50 @@ button:disabled { opacity: 0.5; cursor: default; }
   background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
   border-radius: 10px; padding: 0 12px; font-size: 17px; cursor: pointer;
 }
+
+/* ---------- Loops (v0.4.0) ---------- */
+.loop-doc {
+  background: #0a0d11; border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px 14px; white-space: pre-wrap; word-break: break-word;
+  font-size: 14px; line-height: 1.55; max-width: 860px; margin-bottom: 10px;
+}
+.loop-input {
+  width: 100%; background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 14px;
+}
+textarea.loop-input { resize: vertical; }
+.loop-step {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  padding: 10px 12px; margin-bottom: 10px; max-width: 860px;
+}
+.loop-step-head { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.loop-step-num { font-weight: 700; color: var(--dim); }
+.loop-step-head select { max-width: 220px; }
+.loop-config { display: flex; flex-direction: column; }
+.loop-run-steps { margin: 10px 0; padding-left: 24px; max-width: 860px; }
+.loop-run-steps li { margin-bottom: 8px; line-height: 1.45; }
+.loop-run-steps .loop-step-icon { font-weight: 700; }
+.loop-run-steps li.loop-step-done .loop-step-icon { color: var(--ok); }
+.loop-run-steps li.loop-step-failed .loop-step-icon,
+.loop-run-steps li.loop-step-denied .loop-step-icon { color: var(--danger); }
+.loop-run-steps li.loop-step-waiting_on_user .loop-step-icon { color: #f0c75e; }
+.loop-step-output { color: var(--dim); font-size: 12.5px; white-space: pre-wrap; word-break: break-word; margin-left: 22px; }
+
+/* ---------- Teach from video / SOPs (v0.4.0) ---------- */
+.teach-video-box {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  padding: 12px 14px; margin-bottom: 12px; max-width: 860px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.teach-video-box .row input[type="text"] {
+  flex: 1; background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 14px;
+}
+.sop-heading { margin: 14px 0 8px; font-size: 15px; }
+.sop-card { max-width: 860px; }
+.sop-full { max-width: 100%; margin-top: 10px; }
+#night-loop-select {
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 14px;
+  flex: 1 1 260px;
+}

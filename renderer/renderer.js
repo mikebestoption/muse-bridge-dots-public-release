@@ -1213,6 +1213,54 @@ async function runNightQueue() {
         job.status = res.ok ? 'done' : 'failed';
         job.note = res.output.slice(0, 220);
         await nightLogLine(`${res.ok ? 'DONE' : 'FAILED'} [shell] ${job.text} — ${res.output.slice(0, 400)}`);
+      } else if (job.type === 'loop') {
+        // A whole Loop under this queue's one approval. Manual steps
+        // park the job (waiting on you); task/fill steps execute via
+        // main in queue mode (hands guard included). A failed step
+        // stops THIS job (auto-decide stop — nobody is watching to
+        // skip) and the queue moves on with its other jobs.
+        const loop = loopsCache.find((l) => l.id === job.loopId) || (await window.desktop.loopsGet(job.loopId));
+        if (!loop) {
+          job.status = 'failed';
+          job.note = 'That loop no longer exists.';
+          await nightLogLine(`FAILED [loop] ${job.text} — loop was deleted`);
+        } else {
+          let loopRunner = null;
+          loopRunner = window.MuseLoopRunner.createLoopRunner({
+            loop,
+            deps: {
+              mode: 'queue',
+              chat: async (prompt) => {
+                const r = await bareChat(prompt);
+                return { text: r.text, actions: r.actions };
+              },
+              requestApproval: async () => true, // covered by the queue approval the user tapped
+              executeTask: (action) => window.desktop.executeTask(action, { mode: 'queue', execId: newId() }),
+              waitInstruction: async () => 'park',
+              onEvent: (evt) => {
+                if (evt.type === 'halted' && loopRunner) loopRunner.decide('stop');
+              }
+            }
+          });
+          const result = await loopRunner.start();
+          const doneCount = result.steps.filter((s) => s.status === 'done').length;
+          await nightLogLine(
+            `LOOP [${loop.name}] ${result.status} — ${doneCount}/${result.steps.length} steps done` +
+            result.steps.map((s, i) => `\n  ${i + 1}. [${s.type}] ${s.status}${s.output ? ` — ${s.output.slice(0, 200)}` : ''}`).join('')
+          );
+          if (result.status === 'done') {
+            job.status = 'done';
+            job.note = `Loop "${loop.name}" finished — ${doneCount}/${result.steps.length} steps done.`;
+          } else if (result.status === 'waiting_on_user') {
+            await parkJob(job, result.reason || 'A loop step needs you.');
+          } else if (result.status === 'failed') {
+            job.status = 'failed';
+            job.note = `Loop "${loop.name}": ${result.reason || 'a step failed'} (${doneCount}/${result.steps.length} steps done)`;
+          } else {
+            job.status = 'stopped';
+            job.note = `Loop "${loop.name}" stopped: ${result.reason || ''}`;
+          }
+        }
       } else if (job.type === 'dot-test') {
         const built = await window.desktop.buildDotPacket({
           what: job.text,
@@ -1273,6 +1321,10 @@ async function runNightQueue() {
 function applySettings(s) {
   settings = s;
   els.model.value = s.model;
+  const vimeoNote = document.getElementById('vimeo-note');
+  if (vimeoNote && s.hasVimeoToken) {
+    vimeoNote.textContent = 'A Vimeo token is saved on this PC (encrypted by your operating system). Paste a new token to replace it, or use "Remove Vimeo token" below.';
+  }
   const autolockEl = document.getElementById('vault-autolock');
   if (autolockEl) autolockEl.value = Number.isFinite(s.vaultAutoLockMinutes) ? s.vaultAutoLockMinutes : 10;
   const handsIdleEl = document.getElementById('hands-idle-threshold');
@@ -1298,6 +1350,8 @@ function applySettings(s) {
 
 function openSettings() {
   els.apiKey.value = '';
+  const vimeoEl = document.getElementById('vimeo-token');
+  if (vimeoEl) vimeoEl.value = '';
   els.modal.classList.remove('hidden');
 }
 function closeSettings() {
@@ -1326,6 +1380,10 @@ async function saveSettings() {
   };
   const key = els.apiKey.value.trim();
   if (key) payload.apiKey = key;
+  const vimeoEl = document.getElementById('vimeo-token');
+  const vimeoToken = vimeoEl ? vimeoEl.value.trim() : '';
+  if (vimeoToken) payload.vimeoToken = vimeoToken;
+  if (vimeoEl) vimeoEl.value = '';
   const updated = await window.desktop.saveSettings(payload);
   applySettings(updated);
   closeSettings();
@@ -1503,7 +1561,19 @@ window.addEventListener('drop', (e) => {
   e.preventDefault(); // stop Electron navigating to the dropped file
   const files = e.dataTransfer && e.dataTransfer.files ? [...e.dataTransfer.files] : [];
   hideDropOverlay();
-  if (files.length) attachFiles(files);
+  if (!files.length) return;
+  // Videos route to Teach-from-video intake (they become SOPs); every
+  // other file goes through the normal attachment staging.
+  const isVideo = (f) => (window.MuseSopCore && window.MuseSopCore.isVideoFileName(f.name)) || (f.type || '').startsWith('video/');
+  const videosDropped = files.filter(isVideo);
+  const rest = files.filter((f) => !isVideo(f));
+  if (rest.length) attachFiles(rest);
+  if (videosDropped.length) {
+    document.getElementById('lessons-panel').classList.remove('hidden');
+    renderLessons();
+    renderSops();
+    intakeVideoFiles(videosDropped);
+  }
 });
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && dropOverlay && !dropOverlay.classList.contains('hidden')) {
@@ -1513,6 +1583,7 @@ window.addEventListener('keydown', (e) => {
 document.getElementById('toggle-lessons').addEventListener('click', () => {
   document.getElementById('lessons-panel').classList.toggle('hidden');
   renderLessons();
+  renderSops();
 });
 document.getElementById('close-lessons').addEventListener('click', () => {
   document.getElementById('lessons-panel').classList.add('hidden');
@@ -1564,6 +1635,11 @@ document.getElementById('clear-key').addEventListener('click', async () => {
   const updated = await window.desktop.clearKey();
   applySettings(updated);
   setStatus('API key removed. Back to mock mode.');
+});
+document.getElementById('clear-vimeo').addEventListener('click', async () => {
+  const updated = await window.desktop.clearVimeoToken();
+  applySettings(updated);
+  setStatus('Vimeo token removed. Vimeo links will save metadata only until a token or file is provided.');
 });
 document.getElementById('choose-bridge').addEventListener('click', async () => {
   const updated = await window.desktop.chooseBridgeFolder();
@@ -1635,12 +1711,43 @@ document.getElementById('toggle-night').addEventListener('click', () => {
   renderNight();
 });
 document.getElementById('close-night').addEventListener('click', () => els.nightPanel.classList.add('hidden'));
+document.getElementById('night-job-type').addEventListener('change', (e) => {
+  const isLoop = e.target.value === 'loop';
+  document.getElementById('night-loop-select').classList.toggle('hidden', !isLoop);
+  document.getElementById('night-job-text').disabled = isLoop;
+  document.getElementById('night-job-folder').disabled = isLoop;
+});
 document.getElementById('night-add-job').addEventListener('click', async () => {
+  const type = document.getElementById('night-job-type').value;
+  if (type === 'loop') {
+    // A Loop job: the approved list names the loop; the queue approval
+    // covers its steps (manual steps park; task/fill steps run through
+    // main's queue-mode guards as usual).
+    const loopId = document.getElementById('night-loop-select').value;
+    const loop = loopsCache.find((l) => l.id === loopId);
+    if (!loop) {
+      setStatus('Pick a loop for the Loop job first (create one in the 🔁 Loops panel).');
+      return;
+    }
+    nightJobs.push({
+      id: newId(),
+      type: 'loop',
+      loopId: loop.id,
+      text: loop.name,
+      folder: '',
+      status: 'pending',
+      note: `Loop — ${loop.steps.length} step(s), runs under this queue's approval`,
+      needsAudit: Boolean(settings && settings.auditNightDefault)
+    });
+    await persistNight();
+    renderNight();
+    return;
+  }
   const text = document.getElementById('night-job-text').value.trim();
   if (!text) return;
   nightJobs.push({
     id: newId(),
-    type: document.getElementById('night-job-type').value,
+    type,
     text,
     folder: document.getElementById('night-job-folder').value.trim(),
     status: 'pending',
@@ -2009,6 +2116,8 @@ if (window.desktop.onVaultAutoLocked) {
     renderNight();
     audits = (await window.desktop.storeGet('audits')) || [];
     renderAudits();
+    await refreshLoops();
+    await renderSops();
     await refreshVault();
   } catch (err) {
     addMessageToDom('system', `Startup problem: ${err.message}`);
@@ -2257,3 +2366,957 @@ document.getElementById('flag-last-audit').addEventListener('click', () => {
     content: last.content
   });
 });
+
+// ---------- Loops (v0.4.0) ----------
+// A Loop is a named, reusable workflow of steps, built one by one in
+// this panel (n8n-style): ask Muse Spark (prompt), desktop task (one
+// action through the standard approval), vault fill (by entry label),
+// manual step (instruction — you do it and tap Done), and note
+// (documentation only). Every loop also has a readable document view
+// and a .md export to the Bridge Outbox. Runs execute via
+// src/loopRunner.js with injected deps: task/fill steps go through
+// approval cards rendered in the run view — the approval model is
+// unchanged, a Loop never bypasses it.
+
+const LC = window.MuseLoopsCore;
+const LR = window.MuseLoopRunner;
+const SC = window.MuseSopCore;
+
+let loopsCache = [];
+let loopDraft = null; // { id|null, name, description, steps[] } while building
+let activeLoopRun = null; // { runner, loop } while the run view is live
+let loopApprovalResolve = null;
+let loopInstructionResolve = null;
+
+function showLoopsView(name) {
+  for (const [id, view] of [
+    ['loops-list-view', 'list'],
+    ['loops-builder-view', 'builder'],
+    ['loops-doc-view', 'doc'],
+    ['loops-run-view', 'run']
+  ]) {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle('hidden', view !== name);
+  }
+}
+
+async function refreshLoops() {
+  try {
+    loopsCache = await window.desktop.loopsList();
+  } catch (_) {
+    loopsCache = [];
+  }
+  renderLoopsList();
+  renderNightLoopOptions();
+}
+
+function renderNightLoopOptions() {
+  const sel = document.getElementById('night-loop-select');
+  if (!sel) return;
+  const current = sel.value;
+  sel.innerHTML = '';
+  for (const loop of loopsCache) {
+    const opt = document.createElement('option');
+    opt.value = loop.id;
+    opt.textContent = `${loop.name} (${loop.steps.length} steps)`;
+    sel.appendChild(opt);
+  }
+  if (loopsCache.some((l) => l.id === current)) sel.value = current;
+  if (!loopsCache.length) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = '(no loops yet — build one in the 🔁 Loops panel)';
+    sel.appendChild(opt);
+  }
+}
+
+function renderLoopsList() {
+  const view = document.getElementById('loops-list-view');
+  if (!view) return;
+  view.innerHTML = '';
+  if (!loopsCache.length) {
+    const empty = document.createElement('div');
+    empty.className = 'inbox-empty';
+    empty.textContent = 'No loops yet. Click "+ New loop" and add steps one by one — or generate an SOP from a video (📸 Lessons & SOPs) and turn it into a loop.';
+    view.appendChild(empty);
+    return;
+  }
+  for (const loop of loopsCache) {
+    const card = document.createElement('div');
+    card.className = 'audit-item';
+    const head = document.createElement('div');
+    head.className = 'a-head';
+    const title = document.createElement('span');
+    title.className = 'a-title';
+    title.textContent = `🔁 ${loop.name}`;
+    const meta = document.createElement('span');
+    meta.className = 'a-kind';
+    meta.textContent = `${loop.steps.length} step(s) · updated ${new Date(loop.updatedAt).toLocaleString()}`;
+    head.append(title, meta);
+    card.appendChild(head);
+    if (loop.description) {
+      const desc = document.createElement('div');
+      desc.className = 'a-content';
+      desc.textContent = loop.description;
+      card.appendChild(desc);
+    }
+    const preview = document.createElement('div');
+    preview.className = 'side-note';
+    preview.textContent = loop.steps.map((s, i) => `${i + 1}. ${LC.describeStep(s)}`).join('\n');
+    card.appendChild(preview);
+
+    const row = document.createElement('div');
+    row.className = 'row';
+    const runBtn = document.createElement('button');
+    runBtn.className = 'mini-btn large';
+    runBtn.textContent = '▶ Run';
+    runBtn.addEventListener('click', () => openLoopRun(loop));
+    const docBtn = document.createElement('button');
+    docBtn.className = 'mini-btn large';
+    docBtn.textContent = '📄 Doc';
+    docBtn.addEventListener('click', () => renderLoopDoc(loop));
+    const editBtn = document.createElement('button');
+    editBtn.className = 'mini-btn large';
+    editBtn.textContent = '✏ Edit steps';
+    editBtn.addEventListener('click', () => openLoopBuilder(loop));
+    const nightBtn = document.createElement('button');
+    nightBtn.className = 'mini-btn large';
+    nightBtn.textContent = '🌙 Add to Night Queue';
+    nightBtn.addEventListener('click', () => addLoopToNightQueue(loop));
+    const delBtn = document.createElement('button');
+    delBtn.className = 'mini-btn large danger';
+    delBtn.textContent = 'Delete';
+    delBtn.addEventListener('click', async () => {
+      await window.desktop.loopsRemove(loop.id);
+      await refreshLoops();
+      setStatus(`Loop deleted: ${loop.name}`);
+    });
+    row.append(runBtn, docBtn, editBtn, nightBtn, delBtn);
+    card.appendChild(row);
+    view.appendChild(card);
+  }
+}
+
+async function addLoopToNightQueue(loop) {
+  nightJobs.push({
+    id: newId(),
+    type: 'loop',
+    loopId: loop.id,
+    text: loop.name,
+    folder: '',
+    status: 'pending',
+    note: `Loop — ${loop.steps.length} step(s), runs under the queue's approval`,
+    needsAudit: Boolean(settings && settings.auditNightDefault)
+  });
+  await persistNight();
+  renderNight();
+  setStatus(`Loop "${loop.name}" added to the Night Queue — it runs only when you approve the queue.`);
+}
+
+function renderLoopDoc(loop) {
+  const view = document.getElementById('loops-doc-view');
+  view.innerHTML = '';
+  const pre = document.createElement('div');
+  pre.className = 'loop-doc';
+  pre.textContent = LC.loopToMarkdown(loop);
+  view.appendChild(pre);
+  const row = document.createElement('div');
+  row.className = 'row';
+  const exportBtn = document.createElement('button');
+  exportBtn.className = 'mini-btn large';
+  exportBtn.textContent = '⬇ Export .md to Bridge Outbox';
+  exportBtn.addEventListener('click', async () => {
+    const res = await window.desktop.loopsExportDoc(loop.id);
+    setStatus(res && res.ok ? `Loop document saved to Bridge Outbox: ${res.filename}` : `Export failed: ${res && res.error ? res.error : 'unknown error'}`);
+  });
+  const backBtn = document.createElement('button');
+  backBtn.className = 'mini-btn large';
+  backBtn.textContent = 'Back to loops';
+  backBtn.addEventListener('click', () => showLoopsView('list'));
+  row.append(exportBtn, backBtn);
+  view.appendChild(row);
+  showLoopsView('doc');
+}
+
+// ---------- Loop builder ----------
+
+function cloneStep(step) {
+  return JSON.parse(JSON.stringify(step));
+}
+
+function openLoopBuilder(loop) {
+  loopDraft = loop
+    ? { id: loop.id, name: loop.name, description: loop.description, steps: loop.steps.map(cloneStep) }
+    : { id: null, name: '', description: '', steps: [] };
+  renderLoopBuilder();
+  showLoopsView('builder');
+  document.getElementById('loops-panel').classList.remove('hidden');
+}
+
+function loopField(labelText, control) {
+  const wrap = document.createElement('label');
+  wrap.className = 'vault-field';
+  const span = document.createElement('span');
+  span.textContent = labelText;
+  wrap.append(span, control);
+  return wrap;
+}
+
+function textControl(value, placeholder, multiline) {
+  const el = document.createElement(multiline ? 'textarea' : 'input');
+  if (!multiline) el.type = 'text';
+  if (multiline) el.rows = 2;
+  el.value = value || '';
+  el.placeholder = placeholder || '';
+  el.className = 'loop-input';
+  return el;
+}
+
+function selectControl(options, value) {
+  const sel = document.createElement('select');
+  sel.className = 'loop-input';
+  for (const [v, label] of options) {
+    const opt = document.createElement('option');
+    opt.value = v;
+    opt.textContent = label;
+    sel.appendChild(opt);
+  }
+  sel.value = value;
+  return sel;
+}
+
+// The per-type configuration form for one draft step. Inputs write
+// straight into the draft on 'change' — no re-render, so typing is
+// never disturbed; structural changes (add/remove/move/type) re-render.
+function renderStepConfig(step) {
+  const box = document.createElement('div');
+  box.className = 'loop-config';
+  if (step.type === 'prompt') {
+    const text = textControl(step.text, 'What should Muse Spark do or answer? Use {{prev}} for the previous step\u2019s output.', true);
+    text.addEventListener('change', () => { step.text = text.value; });
+    box.appendChild(loopField('Prompt to Muse Spark ({{prev}} = previous step\u2019s output)', text));
+  } else if (step.type === 'instruction') {
+    const text = textControl(step.text, 'What you will do by hand — the run waits for your Done ✓ tap.', true);
+    text.addEventListener('change', () => { step.text = text.value; });
+    box.appendChild(loopField('Manual step — shown to you, waits for Done ✓', text));
+  } else if (step.type === 'note') {
+    const text = textControl(step.text, 'Documentation only — never runs.', true);
+    text.addEventListener('change', () => { step.text = text.value; });
+    box.appendChild(loopField('Note (documentation only)', text));
+  } else if (step.type === 'fill') {
+    const kind = selectControl([['fill_login', 'Fill login (username + password)'], ['fill_totp', 'Fill authenticator (2FA) code']], step.fillKind);
+    kind.addEventListener('change', () => { step.fillKind = kind.value; });
+    box.appendChild(loopField('Fill kind', kind));
+    const label = textControl(step.entryLabel, 'Vault entry label — e.g. GitHub');
+    label.setAttribute('list', 'vault-label-list');
+    label.addEventListener('change', () => { step.entryLabel = label.value; });
+    box.appendChild(loopField('Vault entry label (the secret itself stays in the vault)', label));
+    const title = textControl(step.targetWindowTitle, 'Optional — defaults to the entry\u2019s saved window');
+    title.addEventListener('change', () => { step.targetWindowTitle = title.value; });
+    box.appendChild(loopField('Target window title (optional)', title));
+  } else if (step.type === 'task') {
+    const action = step.action;
+    const typeSel = selectControl([
+      ['open_url', 'Open a URL'], ['open_app', 'Open an app'],
+      ['list_folder', 'List a folder'], ['create_file', 'Create a file'],
+      ['append_to_file', 'Append to a file'], ['run_command', 'Run a command']
+    ], action.type);
+    box.appendChild(loopField('Desktop action', typeSel));
+    const fields = document.createElement('div');
+    box.appendChild(fields);
+    const renderActionFields = () => {
+      fields.innerHTML = '';
+      const add = (labelText, key, placeholder, multiline) => {
+        const control = textControl(action[key], placeholder, multiline);
+        control.addEventListener('change', () => { action[key] = control.value; });
+        fields.appendChild(loopField(labelText, control));
+      };
+      if (action.type === 'open_url') add('URL', 'url', 'https://…');
+      else if (action.type === 'open_app') { add('App name', 'name', 'e.g. notepad'); add('…or full path to the app', 'path', 'C:\\path\\to\\app.exe'); }
+      else if (action.type === 'list_folder') add('Folder path', 'path', 'e.g. ~/Downloads');
+      else if (action.type === 'create_file') { add('File path', 'path', 'e.g. ~/notes.txt'); add('File contents', 'content', '', true); }
+      else if (action.type === 'append_to_file') { add('File path', 'path', 'e.g. ~/log.md'); add('Text to append', 'content', '', true); }
+      else if (action.type === 'run_command') { add('Exact command line', 'command', 'e.g. whoami'); add('Working folder (optional)', 'cwd', ''); }
+    };
+    typeSel.addEventListener('change', () => {
+      const keep = { type: typeSel.value };
+      for (const key of ['url', 'name', 'path', 'content', 'command', 'cwd']) {
+        if (typeof action[key] === 'string') keep[key] = action[key];
+      }
+      step.action = keep;
+      renderActionFields();
+    });
+    renderActionFields();
+  }
+  return box;
+}
+
+async function renderLoopBuilder() {
+  const view = document.getElementById('loops-builder-view');
+  view.innerHTML = '';
+  // Vault labels for the fill-step autocomplete (labels only, as always).
+  try {
+    const planning = await window.desktop.vaultListForPlanning();
+    const list = document.getElementById('vault-label-list');
+    if (list) {
+      list.innerHTML = '';
+      for (const p of planning || []) {
+        const opt = document.createElement('option');
+        opt.value = p.label;
+        list.appendChild(opt);
+      }
+    }
+  } catch (_) { /* vault unavailable — labels can still be typed */ }
+
+  const name = textControl(loopDraft.name, 'Loop name — e.g. Morning market check');
+  name.addEventListener('change', () => { loopDraft.name = name.value; });
+  view.appendChild(loopField('Loop name', name));
+  const desc = textControl(loopDraft.description, 'What this loop is for — this text heads the loop\u2019s document.', true);
+  desc.addEventListener('change', () => { loopDraft.description = desc.value; });
+  view.appendChild(loopField('Description / purpose (the loop\u2019s documentation)', desc));
+
+  const stepsBox = document.createElement('div');
+  loopDraft.steps.forEach((step, idx) => {
+    const card = document.createElement('div');
+    card.className = 'loop-step';
+    const head = document.createElement('div');
+    head.className = 'loop-step-head';
+    const num = document.createElement('span');
+    num.className = 'loop-step-num';
+    num.textContent = `${idx + 1}.`;
+    const typeSel = selectControl(LC.STEP_TYPES.map((t) => [t, LC.STEP_TYPE_LABELS[t]]), step.type);
+    typeSel.addEventListener('change', () => {
+      const fresh = LC.emptyStep(typeSel.value);
+      fresh.id = step.id;
+      loopDraft.steps[idx] = fresh;
+      renderLoopBuilder();
+    });
+    head.append(num, typeSel);
+    if (step.needsReview) {
+      const chip = document.createElement('span');
+      chip.className = 'chip sent';
+      chip.textContent = '⚠ auto-converted — review';
+      head.appendChild(chip);
+    }
+    const spacer = document.createElement('span');
+    spacer.className = 'grow';
+    head.appendChild(spacer);
+    const up = document.createElement('button');
+    up.className = 'mini-btn';
+    up.textContent = '↑';
+    up.title = 'Move step up';
+    up.disabled = idx === 0;
+    up.addEventListener('click', () => { loopDraft.steps = LC.moveStep(loopDraft.steps, idx, idx - 1); renderLoopBuilder(); });
+    const down = document.createElement('button');
+    down.className = 'mini-btn';
+    down.textContent = '↓';
+    down.title = 'Move step down';
+    down.disabled = idx === loopDraft.steps.length - 1;
+    down.addEventListener('click', () => { loopDraft.steps = LC.moveStep(loopDraft.steps, idx, idx + 1); renderLoopBuilder(); });
+    const del = document.createElement('button');
+    del.className = 'mini-btn danger';
+    del.textContent = '✕';
+    del.title = 'Delete step';
+    del.addEventListener('click', () => { loopDraft.steps.splice(idx, 1); renderLoopBuilder(); });
+    head.append(up, down, del);
+    card.appendChild(head);
+    card.appendChild(renderStepConfig(step));
+    stepsBox.appendChild(card);
+  });
+  view.appendChild(stepsBox);
+
+  const addRow = document.createElement('div');
+  addRow.className = 'row';
+  const addType = selectControl(LC.STEP_TYPES.map((t) => [t, LC.STEP_TYPE_LABELS[t]]), 'prompt');
+  const addBtn = document.createElement('button');
+  addBtn.className = 'mini-btn large';
+  addBtn.textContent = '+ Add step';
+  addBtn.addEventListener('click', () => {
+    loopDraft.steps.push(LC.emptyStep(addType.value));
+    renderLoopBuilder();
+  });
+  addRow.append(addType, addBtn);
+  view.appendChild(addRow);
+
+  const foot = document.createElement('div');
+  foot.className = 'row drawer-foot';
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'approve-big';
+  saveBtn.textContent = loopDraft.id ? 'Save loop' : 'Create loop';
+  saveBtn.addEventListener('click', async () => {
+    const payload = { name: loopDraft.name, description: loopDraft.description, steps: loopDraft.steps };
+    const res = loopDraft.id
+      ? await window.desktop.loopsUpdate(loopDraft.id, payload)
+      : await window.desktop.loopsCreate(payload);
+    if (res && res.ok) {
+      await refreshLoops();
+      showLoopsView('list');
+      setStatus(`Loop saved: ${res.loop.name} (${res.loop.steps.length} steps).`);
+    } else {
+      setStatus(`Could not save the loop: ${res && res.error ? res.error : 'unknown error'}`);
+    }
+  });
+  const backBtn = document.createElement('button');
+  backBtn.className = 'mini-btn large';
+  backBtn.textContent = 'Back to loops';
+  backBtn.addEventListener('click', () => showLoopsView('list'));
+  foot.append(saveBtn, backBtn);
+  view.appendChild(foot);
+}
+
+// ---------- Loop run view ----------
+
+const LOOP_STEP_ICONS = {
+  pending: '○', running: '▶', done: '✓', failed: '✗',
+  skipped: '↷', denied: '⛔', waiting_on_user: '⏸'
+};
+
+function openLoopRun(loop) {
+  showLoopsView('run');
+  document.getElementById('loops-panel').classList.remove('hidden');
+  const view = document.getElementById('loops-run-view');
+  view.innerHTML = '';
+
+  const title = document.createElement('div');
+  title.className = 'v-form-title';
+  title.textContent = `▶ Running loop: ${loop.name}`;
+  view.appendChild(title);
+
+  const controls = document.createElement('div');
+  controls.className = 'row';
+  const pauseBtn = document.createElement('button');
+  pauseBtn.className = 'mini-btn large';
+  pauseBtn.textContent = '⏸ Pause';
+  const stopBtn = document.createElement('button');
+  stopBtn.className = 'mini-btn large';
+  stopBtn.textContent = '■ Stop';
+  const statusEl = document.createElement('span');
+  statusEl.className = 'drawer-sub';
+  statusEl.textContent = 'Running…';
+  controls.append(pauseBtn, stopBtn, statusEl);
+  view.appendChild(controls);
+
+  const checklist = document.createElement('ol');
+  checklist.className = 'loop-run-steps';
+  const itemEls = loop.steps.map((step, i) => {
+    const li = document.createElement('li');
+    const line = document.createElement('div');
+    const icon = document.createElement('span');
+    icon.className = 'loop-step-icon';
+    icon.textContent = LOOP_STEP_ICONS.pending;
+    line.append(icon, document.createTextNode(` ${LC.describeStep(step)}`));
+    li.appendChild(line);
+    const output = document.createElement('div');
+    output.className = 'loop-step-output';
+    li.appendChild(output);
+    li.dataset.stepIndex = String(i);
+    checklist.appendChild(li);
+    return { li, icon, output };
+  });
+  view.appendChild(checklist);
+
+  const decisionBox = document.createElement('div');
+  decisionBox.className = 'pending-job hidden';
+  view.appendChild(decisionBox);
+
+  const log = document.createElement('div');
+  log.className = 'terminal-log';
+  view.appendChild(log);
+  const logLine = (text) => {
+    log.textContent += `${log.textContent ? '\n' : ''}${text}`;
+    log.scrollTop = log.scrollHeight;
+  };
+
+  let paused = false;
+  const runner = LR.createLoopRunner({
+    loop,
+    deps: {
+      mode: 'interactive',
+      chat: async (prompt) => {
+        const r = await bareChat(prompt);
+        return { text: r.text, actions: r.actions };
+      },
+      requestApproval: (action) => new Promise((resolve) => {
+        loopApprovalResolve = resolve;
+        decisionBox.innerHTML = '';
+        decisionBox.classList.remove('hidden');
+        const { label, detail } = describeForCard(action);
+        const head = document.createElement('div');
+        head.textContent = `⚠ Approval needed — ${label}`;
+        const pre = document.createElement('div');
+        pre.className = 'task-detail';
+        pre.textContent = detail;
+        const row = document.createElement('div');
+        row.className = 'row';
+        const approve = document.createElement('button');
+        approve.className = 'approve mini-btn large';
+        approve.textContent = 'Approve & run';
+        approve.addEventListener('click', () => {
+          decisionBox.classList.add('hidden');
+          loopApprovalResolve = null;
+          resolve(true);
+        });
+        const deny = document.createElement('button');
+        deny.className = 'mini-btn large';
+        deny.textContent = 'Deny';
+        deny.addEventListener('click', () => {
+          decisionBox.classList.add('hidden');
+          loopApprovalResolve = null;
+          resolve(false);
+        });
+        row.append(approve, deny);
+        decisionBox.append(head, pre, row);
+      }),
+      executeTask: async (action) => {
+        const execId = newId();
+        handsStatusHandlers.set(execId, (status) => {
+          if (status.kind === 'countdown') {
+            logLine(`✋ Typing in ${status.remainingSec}… hands off — or Stop.`);
+          }
+        });
+        try {
+          return await window.desktop.executeTask(action, { mode: 'interactive', execId });
+        } finally {
+          handsStatusHandlers.delete(execId);
+        }
+      },
+      waitInstruction: (step) => new Promise((resolve) => {
+        loopInstructionResolve = resolve;
+        decisionBox.innerHTML = '';
+        decisionBox.classList.remove('hidden');
+        const head = document.createElement('div');
+        head.textContent = `✋ Your turn: ${step.text}`;
+        const row = document.createElement('div');
+        row.className = 'row';
+        const doneBtn = document.createElement('button');
+        doneBtn.className = 'approve mini-btn large';
+        doneBtn.textContent = 'Done ✓';
+        doneBtn.addEventListener('click', () => {
+          decisionBox.classList.add('hidden');
+          loopInstructionResolve = null;
+          resolve('done');
+        });
+        const skipBtn = document.createElement('button');
+        skipBtn.className = 'mini-btn large';
+        skipBtn.textContent = 'Skip this step';
+        skipBtn.addEventListener('click', () => {
+          decisionBox.classList.add('hidden');
+          loopInstructionResolve = null;
+          resolve('skip');
+        });
+        row.append(doneBtn, skipBtn);
+        decisionBox.append(head, row);
+      }),
+      onEvent: (evt) => {
+        if (evt.type === 'step') {
+          const item = itemEls[evt.index];
+          if (item) {
+            item.icon.textContent = LOOP_STEP_ICONS[evt.status] || '·';
+            item.li.className = `loop-step-${evt.status}`;
+            if (evt.output) item.output.textContent = evt.output;
+          }
+          if (evt.status === 'done' || evt.status === 'failed' || evt.status === 'denied') {
+            logLine(`${LOOP_STEP_ICONS[evt.status] || ''} Step ${evt.index + 1}: ${evt.status}${evt.output ? ` — ${evt.output.slice(0, 200)}` : ''}`);
+          }
+        } else if (evt.type === 'halted') {
+          decisionBox.innerHTML = '';
+          decisionBox.classList.remove('hidden');
+          const head = document.createElement('div');
+          head.textContent = `⏸ Run paused at step ${evt.index + 1}: ${evt.reason}`;
+          const row = document.createElement('div');
+          row.className = 'row';
+          const skipBtn = document.createElement('button');
+          skipBtn.className = 'mini-btn large';
+          skipBtn.textContent = 'Skip this step & continue';
+          skipBtn.addEventListener('click', () => {
+            decisionBox.classList.add('hidden');
+            runner.decide('skip');
+          });
+          const stopBtn2 = document.createElement('button');
+          stopBtn2.className = 'mini-btn large';
+          stopBtn2.textContent = 'Stop the run';
+          stopBtn2.addEventListener('click', () => {
+            decisionBox.classList.add('hidden');
+            runner.decide('stop');
+          });
+          row.append(skipBtn, stopBtn2);
+          decisionBox.append(head, row);
+          statusEl.textContent = 'Paused — your call: skip or stop.';
+        } else if (evt.type === 'run') {
+          if (evt.status === 'paused') statusEl.textContent = 'Paused.';
+          else if (evt.status === 'running') statusEl.textContent = 'Running…';
+        }
+      }
+    }
+  });
+  activeLoopRun = { runner, loop };
+
+  pauseBtn.addEventListener('click', () => {
+    paused = !paused;
+    if (paused) { runner.pause(); pauseBtn.textContent = '▶ Resume'; }
+    else { runner.resume(); pauseBtn.textContent = '⏸ Pause'; }
+  });
+  stopBtn.addEventListener('click', () => {
+    if (loopApprovalResolve) { const r = loopApprovalResolve; loopApprovalResolve = null; r(false); }
+    if (loopInstructionResolve) { const r = loopInstructionResolve; loopInstructionResolve = null; r('stop'); }
+    runner.stop();
+  });
+
+  runner.start().then((result) => {
+    statusEl.textContent = `Run ${result.status}${result.reason ? ` — ${result.reason}` : ''}`;
+    logLine(`■ Loop run ${result.status}. ${result.steps.filter((s) => s.status === 'done').length}/${result.steps.length} steps done.`);
+    pauseBtn.disabled = true;
+    stopBtn.disabled = true;
+    const backRow = document.createElement('div');
+    backRow.className = 'row';
+    const backBtn = document.createElement('button');
+    backBtn.className = 'mini-btn large';
+    backBtn.textContent = 'Back to loops';
+    backBtn.addEventListener('click', () => showLoopsView('list'));
+    backRow.appendChild(backBtn);
+    view.appendChild(backRow);
+    setStatus(`Loop "${loop.name}" run ${result.status}.`);
+  });
+}
+
+// Loops wiring
+document.getElementById('toggle-loops').addEventListener('click', async () => {
+  const panel = document.getElementById('loops-panel');
+  panel.classList.toggle('hidden');
+  if (!panel.classList.contains('hidden')) {
+    await refreshLoops();
+    if (!activeLoopRun || !document.getElementById('loops-run-view').children.length) showLoopsView('list');
+  }
+});
+document.getElementById('close-loops').addEventListener('click', () => {
+  document.getElementById('loops-panel').classList.add('hidden');
+});
+document.getElementById('loops-new').addEventListener('click', () => openLoopBuilder(null));
+
+// ---------- Teach from video: SOPs (v0.4.0) ----------
+// Intake (Vimeo link or video file) -> frames sampled locally in a
+// hidden <video> element -> Spark writes the SOP -> saved to the SOP
+// library -> optionally converted into a draft Loop. A Vimeo link with
+// no staged file and no transcript cannot be analyzed, and its card
+// says so plainly instead of pretending.
+
+let sopsCache = [];
+const pendingTranscripts = {}; // recordId -> transcript text from a user file
+
+function setVideoStatus(text) {
+  const el = document.getElementById('video-status');
+  if (el) el.textContent = text || '';
+}
+
+async function renderSops() {
+  const list = document.getElementById('sops-list');
+  if (!list) return;
+  try {
+    sopsCache = await window.desktop.sopsList();
+  } catch (_) {
+    sopsCache = [];
+  }
+  list.innerHTML = '';
+  if (!sopsCache.length) {
+    const empty = document.createElement('div');
+    empty.className = 'inbox-empty';
+    empty.textContent = 'No SOPs yet. Add a Vimeo link or a video file above.';
+    list.appendChild(empty);
+    return;
+  }
+  for (const record of sopsCache) list.appendChild(renderSopCard(record));
+}
+
+function renderSopCard(record) {
+  const card = document.createElement('div');
+  card.className = 'lesson-card sop-card';
+  const body = document.createElement('div');
+  body.className = 'lesson-body';
+  const title = document.createElement('strong');
+  title.textContent = `${record.sourceKind === 'vimeo' ? '🔗' : '🎬'} ${record.title}`;
+  body.appendChild(title);
+  const meta = document.createElement('div');
+  meta.className = 'side-note';
+  const transcriptLabel = record.transcriptSource && record.transcriptSource !== 'none'
+    ? `transcript: ${record.transcriptSource}`
+    : SC.FRAMES_ONLY_LABEL;
+  meta.textContent = `${record.sourceLabel} · ${record.status === 'generated' ? 'SOP ready' : 'intake only — not analyzed yet'}` +
+    (record.durationSec ? ` · ${Math.round(record.durationSec)}s` : '') +
+    ` · frames: ${record.frameCount || 0} · ${transcriptLabel}`;
+  body.appendChild(meta);
+  if (record.thumbnailUrl) {
+    const img = document.createElement('img');
+    img.className = 'lesson-thumb';
+    img.alt = 'Recording thumbnail (from Vimeo — reference only, not analyzed)';
+    img.src = record.thumbnailUrl;
+    card.appendChild(img);
+  }
+  if (record.note) {
+    const note = document.createElement('div');
+    note.className = 'side-note';
+    note.textContent = record.note;
+    body.appendChild(note);
+  }
+  if (record.status === 'generated' && record.sop) {
+    const summary = document.createElement('div');
+    summary.className = 'a-content';
+    summary.textContent = `${record.sop.goal || ''}\n${(record.sop.steps || []).length} step(s): ${(record.sop.steps || []).map((s) => s.action).join(' → ')}`;
+    body.appendChild(summary);
+  }
+
+  const row = document.createElement('div');
+  row.className = 'row';
+  const canAnalyze = Boolean(record.stagedId) || record.hasTranscript || Boolean(pendingTranscripts[record.id]);
+  const genBtn = document.createElement('button');
+  genBtn.className = 'mini-btn large';
+  genBtn.textContent = record.status === 'generated' ? '✨ Regenerate SOP' : '✨ Generate SOP';
+  genBtn.disabled = !canAnalyze;
+  genBtn.title = canAnalyze ? '' : 'Add the video file (or a Vimeo token in Settings, or a transcript file) — a link + thumbnail alone cannot be analyzed.';
+  genBtn.addEventListener('click', () => generateSop(record));
+  row.appendChild(genBtn);
+
+  const transcriptBtn = document.createElement('button');
+  transcriptBtn.className = 'mini-btn large';
+  transcriptBtn.textContent = pendingTranscripts[record.id] ? '📝 Transcript added ✓' : '📝 Add transcript file';
+  transcriptBtn.addEventListener('click', () => {
+    sopTranscriptTargetId = record.id;
+    document.getElementById('sop-transcript-file').click();
+  });
+  row.appendChild(transcriptBtn);
+
+  if (record.status === 'generated') {
+    const viewBtn = document.createElement('button');
+    viewBtn.className = 'mini-btn large';
+    viewBtn.textContent = '📄 View SOP';
+    viewBtn.addEventListener('click', () => {
+      let pre = card.querySelector('.sop-full');
+      if (pre) { pre.remove(); return; }
+      pre = document.createElement('div');
+      pre.className = 'loop-doc sop-full';
+      pre.textContent = record.markdown || '(no SOP text)';
+      card.appendChild(pre);
+    });
+    row.appendChild(viewBtn);
+    const exportBtn = document.createElement('button');
+    exportBtn.className = 'mini-btn large';
+    exportBtn.textContent = '⬇ Export .md';
+    exportBtn.addEventListener('click', async () => {
+      const res = await window.desktop.sopsExport(record.id);
+      setStatus(res && res.ok ? `SOP saved to Bridge Outbox: ${res.filename}` : `Export failed: ${res && res.error ? res.error : 'unknown error'}`);
+    });
+    row.appendChild(exportBtn);
+    const loopBtn = document.createElement('button');
+    loopBtn.className = 'mini-btn large';
+    loopBtn.textContent = '🔁 Turn into a Loop';
+    loopBtn.addEventListener('click', async () => {
+      const res = await window.desktop.sopToLoop(record.id);
+      if (res && res.ok) {
+        await refreshLoops();
+        openLoopBuilder(res.loop);
+        setStatus(`SOP turned into a Loop draft: "${res.loop.name}" — review every step, then Save. Nothing has been run.`);
+      } else {
+        setStatus(`Could not convert: ${res && res.error ? res.error : 'unknown error'}`);
+      }
+    });
+    row.appendChild(loopBtn);
+  }
+  const delBtn = document.createElement('button');
+  delBtn.className = 'mini-btn large danger';
+  delBtn.textContent = 'Delete';
+  delBtn.addEventListener('click', async () => {
+    await window.desktop.sopsRemove(record.id);
+    delete pendingTranscripts[record.id];
+    renderSops();
+    setStatus(`SOP record deleted: ${record.title}`);
+  });
+  row.appendChild(delBtn);
+  body.appendChild(row);
+  card.appendChild(body);
+  return card;
+}
+
+// Sample frames from a staged video through the muse-video:// stream.
+// Returns { frames: [jpeg data URLs], durationSec }. Frames that fail
+// to capture (e.g. a tainted canvas) are skipped, never faked.
+function sampleVideoFrames(src) {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement('video');
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = 'auto';
+    video.crossOrigin = 'anonymous';
+    let settled = false;
+    const cleanup = () => {
+      try { video.removeAttribute('src'); video.load(); } catch (_) { /* ignore */ }
+    };
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err);
+    };
+    video.addEventListener('error', () => fail(new Error('the video could not be loaded for frame sampling')), { once: true });
+    video.addEventListener('loadedmetadata', async () => {
+      try {
+        const duration = video.duration;
+        const times = SC.planFrameTimes(duration);
+        const frames = [];
+        for (const t of times) {
+          // eslint-disable-next-line no-await-in-loop
+          const frame = await seekAndCapture(video, t);
+          if (frame) frames.push(frame);
+        }
+        settled = true;
+        cleanup();
+        resolve({ frames, durationSec: duration });
+      } catch (err) {
+        fail(err);
+      }
+    });
+    video.src = src;
+  });
+}
+
+function seekAndCapture(video, t) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (value) => {
+      if (done) return;
+      done = true;
+      video.removeEventListener('seeked', onSeeked);
+      resolve(value);
+    };
+    const onSeeked = () => {
+      try {
+        const width = video.videoWidth || 0;
+        const height = video.videoHeight || 0;
+        if (!width || !height) { finish(null); return; }
+        const scale = Math.min(1, 960 / width);
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(2, Math.round(width * scale));
+        canvas.height = Math.max(2, Math.round(height * scale));
+        canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+        finish(canvas.toDataURL('image/jpeg', 0.72));
+      } catch (_) {
+        finish(null); // unreadable/tainted frame: skip it honestly
+      }
+    };
+    video.addEventListener('seeked', onSeeked);
+    const target = Math.max(0, Math.min(t, (video.duration || 0) - 0.05));
+    try { video.currentTime = target; } catch (_) { finish(null); return; }
+    setTimeout(() => finish(null), 5000); // a stuck seek must not hang generation
+  });
+}
+
+async function generateSop(record) {
+  setVideoStatus(`Preparing "${record.title}" — sampling frames…`);
+  let frames = [];
+  if (record.stagedId) {
+    try {
+      const sampled = await sampleVideoFrames(`muse-video://local/${record.stagedId}`);
+      frames = sampled.frames;
+      if (Number.isFinite(sampled.durationSec) && sampled.durationSec > 0) {
+        window.desktop.videoUpdateDuration(record.id, Math.round(sampled.durationSec)).catch(() => {});
+      }
+      setVideoStatus(`Sampled ${frames.length} frame(s) from "${record.title}" — asking Muse Spark to write the SOP…`);
+    } catch (err) {
+      setVideoStatus(`Frame sampling failed (${err.message}) — generating from the transcript only, if one is available.`);
+    }
+  }
+  const res = await window.desktop.sopGenerate({
+    recordId: record.id,
+    frames,
+    transcriptText: pendingTranscripts[record.id]
+  });
+  if (res && res.ok) {
+    delete pendingTranscripts[record.id];
+    await renderSops();
+    setVideoStatus(
+      res.mode === 'mock'
+        ? 'Mock SOP created — it is labeled as a placeholder. Add your Meta Model API key in Settings for a real analysis of the recording.'
+        : res.visionRejected
+          ? 'SOP created from the transcript only — the Meta Model API rejected the sampled frames as image input.'
+          : `SOP created for "${record.title}" — view it on its card, export it, or turn it into a Loop.`
+    );
+  } else {
+    setVideoStatus(`SOP generation failed: ${res && res.error ? res.error : 'unknown error'}`);
+  }
+}
+
+async function intakeVideoFiles(files) {
+  for (const file of files || []) {
+    if (!file) continue;
+    if (!SC.isVideoFileName(file.name) && !(file.type || '').startsWith('video/')) {
+      setVideoStatus(`"${file.name}" is not a video file (mp4, webm, mov).`);
+      continue;
+    }
+    const filePath = window.desktop.getFilePath ? window.desktop.getFilePath(file) : '';
+    if (!filePath) {
+      setVideoStatus('Could not get that file\u2019s path on this PC — use the "Choose a video file…" button instead.');
+      continue;
+    }
+    setVideoStatus(`Copying "${file.name}" into the app (streamed — up to 500 MB)…`);
+    const res = await window.desktop.videoStageFile(filePath);
+    if (res && res.ok) {
+      await renderSops();
+      setVideoStatus(`Video added: "${res.record.title}". Click "✨ Generate SOP" on its card to analyze the recording.`);
+    } else {
+      setVideoStatus(`Video intake failed: ${res && res.error ? res.error : 'unknown error'}`);
+    }
+  }
+}
+
+// Teach-from-video wiring
+document.getElementById('vimeo-add').addEventListener('click', async () => {
+  const input = document.getElementById('vimeo-url');
+  const url = input.value.trim();
+  if (!url) {
+    setVideoStatus('Paste a Vimeo link first.');
+    return;
+  }
+  setVideoStatus('Reading the Vimeo link…');
+  const res = await window.desktop.videoIntakeVimeo(url);
+  if (res && res.ok) {
+    input.value = '';
+    await renderSops();
+    setVideoStatus(res.record.note
+      ? `Link saved: "${res.record.title}". ${res.record.note}`
+      : `Link saved: "${res.record.title}" — frames and captions are ready; click "✨ Generate SOP" on its card.`);
+  } else {
+    setVideoStatus(`Could not add that link: ${res && res.error ? res.error : 'unknown error'}`);
+  }
+});
+document.getElementById('video-pick').addEventListener('click', () => {
+  document.getElementById('teach-video-file').click();
+});
+document.getElementById('teach-video-file').addEventListener('change', (e) => {
+  const files = e.target.files ? [...e.target.files] : [];
+  e.target.value = '';
+  if (files.length) intakeVideoFiles(files);
+});
+
+// Optional narration transcript for an intake record (.txt/.md/.vtt).
+let sopTranscriptTargetId = null;
+{
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.id = 'sop-transcript-file';
+  input.accept = '.txt,.md,.vtt,text/plain';
+  input.className = 'hidden';
+  input.addEventListener('change', async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file || !sopTranscriptTargetId) return;
+    let text = await file.text();
+    if (/\.vtt$/i.test(file.name)) text = SC.vttToText(text);
+    if (!text.trim()) {
+      setVideoStatus('That transcript file looks empty after reading it.');
+      return;
+    }
+    pendingTranscripts[sopTranscriptTargetId] = text;
+    sopTranscriptTargetId = null;
+    await renderSops();
+    setVideoStatus('Transcript added — it will be used when you click "✨ Generate SOP".');
+  });
+  document.body.appendChild(input);
+}
