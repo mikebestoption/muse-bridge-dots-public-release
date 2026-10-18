@@ -333,7 +333,7 @@ function renderAttachmentChips() {
     const sub = document.createElement('span');
     sub.className = 'attach-sub';
     sub.textContent = att.kind === 'image'
-      ? `image · ${ATT.formatSize(att.size)}`
+      ? (att.size ? `image · ${ATT.formatSize(att.size)}` : 'image')
       : `document · ${ATT.formatSize(att.size)}${att.truncated ? ' · first 100 KB sent' : ''}`;
     meta.appendChild(sub);
     chip.appendChild(meta);
@@ -359,8 +359,12 @@ function addPendingAttachment(att) {
 }
 
 // Stage one image from a data URL (Lessons panel "attach screenshot").
+// Size is estimated from the base64 payload (3/4 of its length).
 function stageImageDataUrl(dataUrl, name) {
-  addPendingAttachment({ kind: 'image', name: name || 'screenshot', size: 0, dataUrl });
+  const comma = String(dataUrl).indexOf(',');
+  const payload = comma >= 0 ? dataUrl.slice(comma + 1) : '';
+  const size = Math.floor((payload.length * 3) / 4);
+  addPendingAttachment({ kind: 'image', name: name || 'screenshot', size, dataUrl });
 }
 
 function readAsDataUrl(file) {
