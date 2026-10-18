@@ -1,4 +1,4 @@
-# Muse Bridge — v0.4.0 (Loops + Teach from video)
+# Muse Bridge — v0.4.1 (Ask Muse)
 
 **Muse Bridge** is a free, open-source desktop app for Windows,
 powered by Muse Spark (Meta Model API). It is published under the
@@ -12,6 +12,37 @@ if you would like to propose an improvement. It has three jobs:
 3. **Bridge ChatGPT (Dot) and Muse** — the two-engine cross-check loop:
    ChatGPT results come in, Muse Spark reviews them; Muse Spark results go
    out as "verify this" packets; Dot's audit feedback comes back and gets logged.
+
+## Changes in 0.4.1
+
+- **✉️ Ask Muse — ask for features from inside the app.** A new
+  **✉️ Ask Muse** panel (left column): pick a kind — **App feature**,
+  **New skill**, **Task for Muse**, **Question** — type what you
+  want in plain words ("hey, I want you to do such and such"), and hit
+  **Send to Muse**. Instead of opening the Muse chat, the app
+  files the request in the `requests/` folder of the private
+  `mikebestoption-Muse-Bridge` repo, where Muse picks it up,
+  does the work, and ships the result back as an ordinary app update.
+  The panel tracks every request through its statuses — **Sent →
+  Seen by Muse → Muse is building it → Shipped in vX.Y.Z** (or
+  **Answered**, for questions, with the answer or a pointer to it) —
+  read back from the repo on refresh, cached locally so the list
+  still shows offline with a plain "showing the last check" note.
+  Requests you sent from your other PC appear here too. The full
+  two-sided contract is `docs/REQUESTS-PROTOCOL.md`.
+- **One-time setup: a GitHub token.** Sending needs a fine-grained
+  GitHub token saved in **⚙ Settings → GitHub token (for Ask Muse)**
+  — scoped to only the `mikebestoption-Muse-Bridge` repo,
+  Contents: Read and write (the Walkthrough has the click-by-click).
+  Like your API key, it is stored OS-encrypted on this PC only, is
+  never logged or shown back, and the app uses it for **nothing
+  except the `requests/` folder of that one repo** (the client
+  refuses every other path in code). **Without a token, nothing is
+  faked:** Send saves the request as a local draft with a plain note
+  ("Add your GitHub token in Settings to send this to Muse") and a
+  **Copy request text** fallback. Sends are idempotent — a retry
+  first checks whether the request already landed, so a flaky
+  connection can never file a duplicate.
 
 ## Changes in 0.4.0
 
@@ -458,11 +489,15 @@ that used to be manual only because a password had to be typed.
   only — never secrets).
 - SOPs: `sops.json`, same folder; staged video files live under
   `video-temp/` in the same folder. Both stay on this PC.
+- Ask Muse: `requests-local.json`, same folder — this machine's
+  request drafts + the cached status list. The requests themselves
+  live in the private repo's `requests/` folder once sent.
 - Vault: `vault.json`, same folder — a single AES-256-GCM/scrypt-encrypted
   blob. It never leaves that folder and is excluded from this repo.
 - Nothing is uploaded anywhere except your chat messages going to the Meta
-  Model API when you have a key set. (Vault labels + usernames ride along
-  as planning context; secrets never do.)
+  Model API when you have a key set, and — only when you use Ask Muse
+  with a GitHub token saved — the request files you send. (Vault labels +
+  usernames ride along as planning context; secrets never do.)
 
 ## Known limits (v0.3.1)
 

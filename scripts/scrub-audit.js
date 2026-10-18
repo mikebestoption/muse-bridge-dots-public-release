@@ -96,6 +96,36 @@ const WAIVERS = [
     reason: 'JBSWY3DPEHPK3PXP is the canonical public TOTP test vector (base32 of "Hello!\\xde\\xad\\xbe\\xef"), a fixture, not a real credential.'
   },
   {
+    file: 'tests/requests.test.js',
+    rule: 'bearer-or-key-assignment',
+    reason: 'FAKE-GH-TOKEN-1234567890 is a test fixture asserted ABSENT from every artifact (the redaction suite); it is not a real credential and never reaches the network (injected fake fetch).'
+  },
+  {
+    file: 'tests/noSecrets.test.js',
+    rule: 'bearer-or-key-assignment',
+    reason: 'FAKE-GH-TOKEN-nosecrets-12345 is a test fixture asserted ABSENT from every serialized artifact (the no-secrets guarantee); not a real credential, never reaches the network.'
+  },
+  {
+    file: 'src/githubRequests.js',
+    rule: 'private-repo-reference',
+    reason: 'v0.4.1 Ask Muse: the repo constant IS the feature — the app files requests into this one repo\'s requests/ folder (Michael\'s explicit spec, Oct 18, 2026). A name only; no credential or other private data.'
+  },
+  {
+    file: 'renderer/index.html',
+    rule: 'private-repo-reference',
+    reason: 'v0.4.1 Ask Muse: the Settings help text must name the exact repo the token is scoped to, so the maintainer can verify the scope before pasting a token (Michael\'s explicit spec, Oct 18, 2026).'
+  },
+  {
+    file: 'README.md',
+    rule: 'private-repo-reference',
+    reason: 'v0.4.1 Ask Muse changelog names the requests repo the feature targets — the feature is meaningless described otherwise (Michael\'s explicit spec, Oct 18, 2026).'
+  },
+  {
+    file: 'WALKTHROUGH.md',
+    rule: 'private-repo-reference',
+    reason: 'v0.4.1 Ask Muse: the one-time token walkthrough must name the exact repo to select in GitHub\'s fine-grained token form (Michael\'s explicit spec, Oct 18, 2026).'
+  },
+  {
     file: 'scripts/scrub-audit.js',
     rule: 'windows-personal-path',
     reason: 'This script contains the detection pattern itself, not a real path.'

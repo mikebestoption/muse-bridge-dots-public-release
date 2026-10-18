@@ -15,6 +15,7 @@ nightQueue.json
 audits.json
 loops.json
 sops.json
+requests-local.json
 video-temp/
 *.log
 test-log.md

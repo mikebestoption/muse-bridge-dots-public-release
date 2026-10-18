@@ -596,7 +596,7 @@ The approval rule does not change inside a loop:
 Every loop documents itself. Click **📄 Doc** on its card to read it:
 the name, your description, and the numbered steps in plain English.
 **⬇ Export .md** writes that document into the Bridge **Outbox**
-(Section 16), so it can be shared, archived, or handed to Dot/Muse
+(Section 17), so it can be shared, archived, or handed to Dot/Muse
 like any other packet.
 
 ### 14d. Run a loop overnight
@@ -688,7 +688,92 @@ Click **🔁 Turn into a Loop** on a generated SOP. The app builds a
   loop**. The draft is **never auto-run** — it runs only when you run
   it, under the normal approval rules.
 
-## 16. Where everything lives — the Bridge folder and logs
+## 16. ✉️ Ask Muse — asking for features from inside the app
+
+You don't have to open the Muse chat to ask for something. The
+**✉️ Ask Muse** panel (left column) takes the request right here:
+you type it, the app sends it to Muse, Muse does the work, and
+the result comes back — as an app update, an answer, or a note about
+where the result lives.
+
+### 16a. One-time setup: the GitHub token
+
+Sending rides on the private GitHub repo, so the app needs a token
+that can write to exactly that repo and nothing else. You create it
+once, on the GitHub website:
+
+1. Go to **github.com** and sign in.
+2. Click your **profile picture** (top right) → **Settings**.
+3. In the left column, scroll to the bottom: **Developer settings**.
+4. **Personal access tokens** → **Fine-grained tokens** →
+   **Generate new token**.
+5. Give it a name (e.g. `Muse Bridge — Ask Muse`) and an expiration
+   you are comfortable with.
+6. **Repository access** → **Only select repositories** → select
+   **mikebestoption-Muse-Bridge** (just that one).
+7. **Permissions** → **Repository permissions** → **Contents** →
+   **Read and write**. (Leave everything else alone.)
+8. **Generate token**, then copy it — GitHub shows it once.
+9. Back in Muse Bridge: **⚙ Settings → GitHub token (for Ask
+   Muse)** → paste → **Save**.
+
+The token is stored encrypted on this PC, exactly like your Meta API
+key — never logged, never shown again, and the app uses it for
+nothing except the `requests/` folder of that one repo. Do the same
+on your other PC with its own token if you want to send from there
+too (tokens are per-PC; requests and statuses sync through the repo
+either way).
+
+### 16b. Send a request
+
+1. Open **✉️ Ask Muse**.
+2. Pick the kind: **App feature** (a change to Muse Bridge),
+   **New skill**, **Task for Muse** (work that isn't an app
+   change), or **Question**.
+3. Type it in plain words — *"hey, I want you to do such and such"*
+   is exactly the right register. The first line becomes the
+   request's title, so make it a good summary.
+4. Click **✉️ Send to Muse**.
+
+The request lands in the repo as `requests/REQ-<date>-<time>-<title>.md`
+— your words verbatim, with a small header (when, from which PC,
+which app version, which type).
+
+### 16c. Watch it move
+
+Every request shows a status chip:
+
+- **Sent to Muse** — filed in the repo, not yet picked up.
+- **Seen by Muse** — Muse's side has it and has logged it.
+- **Muse is building it** — work is actively in progress.
+- **Shipped in vX.Y.Z** — done, and live in that release. Your app
+  will offer the update itself (Settings → Updates, or on its next
+  launch) — the loop closes on its own.
+- **Answered** — for questions (and tasks that don't change the
+  app). The card shows the answer, or where it was answered
+  ("answered in your Muse chat").
+
+Click **↻ Refresh statuses** (or just reopen the panel) to pull the
+latest states. Requests sent from your other PC show up here too.
+If GitHub is unreachable, the panel shows the **last check** and says
+so — it never pretends the list is empty or broken.
+
+### 16d. No token yet? Drafts, honestly
+
+If you haven't saved a GitHub token, **Send** does **not** pretend:
+the request is saved as a **draft on this PC** with the note *"Add
+your GitHub token in Settings to send this to Muse"*, plus a
+**Copy request text** button so you can paste it anywhere yourself.
+Once the token is saved, the draft's **✉️ Send now** button files it
+for real. If a send fails mid-flight (connection drops), the request
+stays as a **Send failed — retry** draft; retrying first checks
+whether the file already landed, so you never file a duplicate.
+
+The full contract between the app and Muse's side — file formats,
+status vocabulary, who writes what — lives in
+`docs/REQUESTS-PROTOCOL.md` in the repo.
+
+## 17. Where everything lives — the Bridge folder and logs
 
 By default the Bridge folder is in your **Documents**:
 
@@ -712,10 +797,13 @@ your master password, as Section 12 explains. It is never uploaded
 anywhere and never included in the code repo.
 So do your **Loops** (`loops.json`), your **SOPs** (`sops.json`), and
 any staged video files (`video-temp\`) — all local, all yours.
+So is `requests-local.json` — your Ask Muse drafts and the cached
+status list (the sent requests themselves live in the private repo's
+`requests\` folder, Section 16).
 Nothing in this app is uploaded anywhere except your chat messages going
 to Meta when you are in live mode.
 
-## 17. Troubleshooting
+## 18. Troubleshooting
 
 **"It says Mock mode / my answers start with [Mock mode…]"**
 You have not added an API key yet, or it was removed. **⚙ Settings** →
@@ -888,3 +976,19 @@ The loop reached a **Manual step** (or a fill against a locked vault,
 or a typing step while the screen was locked) — something only you can
 do. Do that step yourself in the morning, then run the loop from the
 🔁 Loops panel to finish it interactively.
+
+**"My Ask Muse request sits at 'Sent to Muse' and never moves"**
+Statuses move when Muse's side picks the request up — the watcher
+polls the repo regularly and the nightly 2:30 AM summary sweeps it
+too. If it has been a full day, check that the request really sent
+(a **Draft** or **Send failed** chip means it never left this PC —
+save the GitHub token in ⚙ Settings, then use the request's
+**✉️ Send now** / **↻ Retry send** button), and that the token
+hasn't expired on GitHub (fine-grained tokens show their expiration
+under github.com → Settings → Developer settings; generate a fresh
+one and paste it over the old if it lapsed).
+
+**"Ask Muse says it's offline / showing the last check"**
+The panel could not reach GitHub at the last refresh — your requests
+are safe (they're either already in the repo or saved as drafts here).
+Check the PC's connection, then **↻ Refresh statuses**.
