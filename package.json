@@ -17,7 +17,7 @@
     "dist:linux": "electron-builder --linux zip",
     "scrub": "node scripts/scrub-audit.js"
   },
-  "version": "0.3.3",
+  "version": "0.3.4",
   "dependencies": {
     "electron-updater": "^6.8.9"
   },
