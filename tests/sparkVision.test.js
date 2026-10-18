@@ -56,6 +56,60 @@ const IMG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCA
     'vision message uses [{text},{image_url}] content'
   );
 
+  // SYSTEM_PROMPT also explains attached document blocks (v0.3.4).
+  assert.ok(/Attached documents/.test(SYSTEM_PROMPT), 'SYSTEM_PROMPT mentions attached documents');
+  assert.ok(/\[Attached document:/.test(SYSTEM_PROMPT), 'SYSTEM_PROMPT names the document block marker');
+
+  // v0.3.4: several images on one message -> one image_url part each.
+  const IMG2 = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==';
+  const multiOut = toApiMessages([
+    { role: 'user', content: 'two shots', imageDataUrls: [IMG, IMG2] }
+  ]);
+  assert.deepStrictEqual(
+    multiOut[0],
+    {
+      role: 'user',
+      content: [
+        { type: 'text', text: 'two shots' },
+        { type: 'image_url', image_url: { url: IMG } },
+        { type: 'image_url', image_url: { url: IMG2 } }
+      ]
+    },
+    'imageDataUrls produces one image_url part per image'
+  );
+  // A single entry in imageDataUrls yields exactly the v0.3.3 shape.
+  assert.deepStrictEqual(
+    toApiMessages([{ role: 'user', content: 'one', imageDataUrls: [IMG] }])[0],
+    {
+      role: 'user',
+      content: [
+        { type: 'text', text: 'one' },
+        { type: 'image_url', image_url: { url: IMG } }
+      ]
+    },
+    'single imageDataUrls entry matches the single-image shape'
+  );
+  // imageDataUrl + imageDataUrls combine, imageDataUrl first.
+  const comboOut = toApiMessages([
+    { role: 'user', content: 'combo', imageDataUrl: IMG, imageDataUrls: [IMG2] }
+  ]);
+  assert.deepStrictEqual(
+    comboOut[0].content.map((p) => p.type),
+    ['text', 'image_url', 'image_url'],
+    'combined fields produce text + two image parts'
+  );
+  // Empty/invalid entries in imageDataUrls are ignored, not vision.
+  assert.deepStrictEqual(
+    toApiMessages([{ role: 'user', content: 'x', imageDataUrls: [] }]),
+    [{ role: 'user', content: 'x' }],
+    'empty imageDataUrls stays plain'
+  );
+  assert.deepStrictEqual(
+    toApiMessages([{ role: 'user', content: 'x', imageDataUrls: ['', null, 42] }]),
+    [{ role: 'user', content: 'x' }],
+    'invalid imageDataUrls entries are dropped'
+  );
+
   // Empty/absent imageDataUrl is not vision.
   assert.deepStrictEqual(
     toApiMessages([{ role: 'user', content: 'x', imageDataUrl: '' }]),

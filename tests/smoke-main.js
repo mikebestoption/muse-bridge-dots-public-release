@@ -12,6 +12,10 @@
 //      does not move while the settings body scrolls (overflow-y auto), and
 //      every drawer (Audits/Vault/Terminals/Night Queue) keeps its head
 //      visible with a scrolling body (Night Queue's Approve row pinned).
+//   5. v0.3.4 attachments: the classifier module loads in the renderer,
+//      the native file input is invisible, the drop overlay shows on
+//      dragenter and cancels on Escape, and a simulated drop stages a
+//      document chip (and refuses a binary with an honest note).
 // Prints SMOKE PASS and exits 0, or SMOKE FAIL and exits 1.
 
 const fs = require('fs');
@@ -133,6 +137,86 @@ const PAGE_SCRIPT = `
 })()
 `;
 
+// v0.3.4: attachment UX assertions — the pure classifier is live in the
+// page (window.MuseAttachments), the native file input is invisible,
+// the drop overlay shows on dragenter and cancels on Escape, and a
+// simulated drop of a text file stages a document chip that can be
+// removed again. Throws (failing the smoke) on the first violation.
+const ATTACH_SCRIPT = `
+(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const checks = [];
+  const M = window.MuseAttachments;
+  if (!M) throw new Error('window.MuseAttachments missing — src/attachments.js did not load in the renderer');
+  checks.push('attachments module loaded in renderer');
+  const docCls = M.classifyFile({ name: 'note.txt', type: 'text/plain', size: 12, sample: new TextEncoder().encode('hello world') });
+  if (docCls.kind !== 'document') throw new Error('classify .txt in page failed: ' + JSON.stringify(docCls));
+  const binCls = M.classifyFile({ name: 'setup.exe', type: '', size: 99, sample: new Uint8Array([77, 90, 0, 3, 0, 0]) });
+  if (binCls.kind !== 'unsupported') throw new Error('classify .exe in page failed: ' + JSON.stringify(binCls));
+  checks.push('in-page classification: text -> document, exe -> unsupported');
+
+  const fileInput = document.getElementById('attach-file');
+  if (!fileInput) throw new Error('attach-file input missing');
+  const inputDisplay = getComputedStyle(fileInput).display;
+  if (inputDisplay !== 'none') throw new Error('native file input is VISIBLE (display=' + inputDisplay + ') — the v0.3.3 raw "Choose File" bug');
+  if (!fileInput.multiple) throw new Error('file picker does not accept multiple files');
+  checks.push('native file input hidden; picker accepts multiple');
+
+  const overlay = document.getElementById('drop-overlay');
+  if (!overlay) throw new Error('drop overlay element missing');
+  if (!overlay.classList.contains('hidden')) throw new Error('drop overlay visible at rest');
+  const row = document.getElementById('attachments-row');
+  if (!row) throw new Error('attachments chips row missing');
+  checks.push('drop overlay + chips row present, overlay hidden at rest');
+
+  // Simulated drag: overlay appears on dragenter with Files.
+  const dt = new DataTransfer();
+  dt.items.add(new File(['hello from a dropped file'], 'dropped-note.txt', { type: 'text/plain' }));
+  window.dispatchEvent(new DragEvent('dragenter', { dataTransfer: dt, bubbles: true }));
+  await sleep(80);
+  if (overlay.classList.contains('hidden')) throw new Error('overlay did not show on dragenter');
+  checks.push('dragenter shows the drop overlay');
+
+  // Drop: overlay hides and the text file stages as a document chip.
+  window.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
+  await sleep(400);
+  if (!overlay.classList.contains('hidden')) throw new Error('overlay did not hide after drop');
+  const chipText = row.innerText || '';
+  if (!chipText.includes('dropped-note.txt')) throw new Error('no chip for the dropped text file: ' + chipText);
+  if (!chipText.includes('document')) throw new Error('chip does not label the file as a document: ' + chipText);
+  checks.push('drop stages a document chip');
+
+  // Dropping an unsupported binary stages nothing and says so honestly.
+  const dtExe = new DataTransfer();
+  dtExe.items.add(new File([new Uint8Array([77, 90, 0, 3, 0, 0])], 'evil.exe', { type: '' }));
+  window.dispatchEvent(new DragEvent('drop', { dataTransfer: dtExe, bubbles: true }));
+  await sleep(400);
+  if ((row.innerText || '').includes('evil.exe')) throw new Error('unsupported binary was staged as a chip');
+  const statusText = document.getElementById('status-line').textContent || '';
+  if (!statusText.includes('evil.exe')) throw new Error('unsupported drop produced no honest status note: ' + statusText);
+  checks.push('unsupported binary refused with a named status note');
+
+  // Escape cancels a hovering drag overlay.
+  const dt2 = new DataTransfer();
+  dt2.items.add(new File(['x'], 'a.txt', { type: 'text/plain' }));
+  window.dispatchEvent(new DragEvent('dragenter', { dataTransfer: dt2, bubbles: true }));
+  await sleep(80);
+  if (overlay.classList.contains('hidden')) throw new Error('overlay did not re-show on second dragenter');
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await sleep(80);
+  if (!overlay.classList.contains('hidden')) throw new Error('Escape did not cancel the overlay');
+  checks.push('Escape cancels the drop overlay');
+
+  // Chips are removable.
+  for (const btn of row.querySelectorAll('.attach-remove')) btn.click();
+  await sleep(80);
+  if ((row.innerText || '').includes('dropped-note.txt')) throw new Error('chip remove button failed');
+  if (!row.classList.contains('hidden')) throw new Error('chips row did not hide when emptied');
+  checks.push('chips removable; row hides when empty');
+  return checks;
+})()
+`;
+
 // v0.3.2: small-viewport panel layout assertions. Run after PAGE_SCRIPT at
 // each window size; throws (failing the smoke) on the first violation.
 const LAYOUT_SCRIPT = `
@@ -216,6 +300,10 @@ app.whenReady().then(async () => {
       app.exit(1);
       return;
     }
+    // v0.3.4: attachment UX (classifier in page, hidden native input,
+    // overlay show/Escape, simulated drop staging + chip removal).
+    const attachChecks = await win.webContents.executeJavaScript(ATTACH_SCRIPT);
+    for (const c of attachChecks) console.log('  ✓', c);
     // v0.3.2: panel layout at desktop and small/scaled window sizes.
     for (const [w, h] of [[1280, 720], [1024, 640]]) {
       win.setSize(w, h);

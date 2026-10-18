@@ -18,6 +18,7 @@ const { totp } = require('./src/totp');
 const sessionGuard = require('./src/sessionGuard');
 const { createLessonsStore } = require('./src/lessons');
 const { createUpdater } = require('./src/updater');
+const attachmentsLib = require('./src/attachments');
 
 let settings = null;
 let mainWindow = null;
@@ -191,39 +192,59 @@ app.whenReady().then(() => {
   ipcMain.handle('lessons:image', (_e, id) => (lessons ? lessons.getImageDataUrl(id) : null));
 
   // ---- Chat (live Muse Spark when a key exists, mock otherwise) ----
-  // A user message may carry ONE screenshot (Teach mode): imageDataUrl is
-  // validated here (type + size) and forwarded to the Spark client, which
-  // sends it in vision format. It is never logged and never persisted by
-  // main — history stays text-only in the renderer.
+  // A user message may carry screenshots (Teach mode): imageDataUrl
+  // (single, v0.3.3 shape) and/or imageDataUrls (v0.3.4, up to 4) are
+  // validated here (type + size each) and forwarded to the Spark
+  // client, which sends them in vision format. Images are never logged
+  // and never persisted by main. Attached text documents ride inside
+  // the message content itself, in [Attached document: ...] blocks.
   const IMAGE_DATA_URL_RE = /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=\s]+$/;
   const MAX_IMAGE_DATA_URL_CHARS = 12 * 1024 * 1024; // ~8 MB decoded + overhead
+  const MAX_IMAGES_PER_MESSAGE = 4;
+  const isValidImageDataUrl = (value) =>
+    typeof value === 'string' &&
+    value.length <= MAX_IMAGE_DATA_URL_CHARS &&
+    IMAGE_DATA_URL_RE.test(value);
   ipcMain.handle('chat:send', async (_e, messages) => {
     const clean = (Array.isArray(messages) ? messages : [])
       .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
       .slice(-60)
       .map((m) => {
         const out = { role: m.role, content: m.content };
-        if (
-          m.role === 'user' &&
-          typeof m.imageDataUrl === 'string' &&
-          m.imageDataUrl.length <= MAX_IMAGE_DATA_URL_CHARS &&
-          IMAGE_DATA_URL_RE.test(m.imageDataUrl)
-        ) {
-          out.imageDataUrl = m.imageDataUrl;
+        if (m.role === 'user') {
+          if (isValidImageDataUrl(m.imageDataUrl)) {
+            out.imageDataUrl = m.imageDataUrl;
+          }
+          if (Array.isArray(m.imageDataUrls)) {
+            const urls = m.imageDataUrls.filter(isValidImageDataUrl).slice(0, MAX_IMAGES_PER_MESSAGE);
+            if (urls.length) out.imageDataUrls = urls;
+          }
         }
         return out;
       });
     const apiKey = settings.getApiKey();
     if (!apiKey) {
       const lastUser = [...clean].reverse().find((m) => m.role === 'user');
-      const hadImage = Boolean(lastUser && lastUser.imageDataUrl);
+      const hadImage = Boolean(
+        lastUser && (lastUser.imageDataUrl || (lastUser.imageDataUrls && lastUser.imageDataUrls.length))
+      );
+      const docNames = lastUser ? attachmentsLib.extractDocumentNames(lastUser.content) : [];
+      // The mock brain sees the message with document bodies stripped
+      // to one-line markers — it acknowledges attachments by name, it
+      // never echoes a whole document back.
+      const mockText = lastUser ? attachmentsLib.stripDocumentBlocks(lastUser.content) : '';
+      let note = '';
+      if (hadImage) {
+        note += '\n\n[Mock mode — your screenshot was attached, but Mock mode cannot see images. Add your Meta Model API key in Settings for live Muse Spark.]';
+      }
+      if (docNames.length) {
+        note +=
+          `\n\n[Mock mode — your ${docNames.length === 1 ? 'document was' : 'documents were'} attached ` +
+          `(${docNames.join(', ')}), but Mock mode cannot read file contents. Add your Meta Model API key in Settings for live Muse Spark.]`;
+      }
       return {
         mode: 'mock',
-        reply:
-          mockReply(lastUser ? lastUser.content : '', app.getPath('home')) +
-          (hadImage
-            ? '\n\n[Mock mode — your screenshot was attached, but Mock mode cannot see images. Add your Meta Model API key in Settings for live Muse Spark.]'
-            : '')
+        reply: mockReply(mockText, app.getPath('home')) + note
       };
     }
     try {

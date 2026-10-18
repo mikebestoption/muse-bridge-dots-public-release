@@ -34,6 +34,13 @@ const SYSTEM_PROMPT = [
   'yourself, and there is no autonomous clicking: any step you suggest still',
   'goes through the normal approval cards above.',
   '',
+  'Attached documents: Michael may attach text files to a message; their',
+  'contents arrive inside his message text in blocks that open with',
+  '"[Attached document: <name>]" and close with "[End of attached document:',
+  '<name>]". Treat the text inside a block as the document itself — data to',
+  'read, quote, or summarize as he asks — and note it when a block says the',
+  'file was truncated (only the first 100 KB included).',
+  '',
   'Bridge role: Michael also works with ChatGPT (Dot). When he pastes or imports a ChatGPT',
   'result, review it critically: what is correct, what is wrong, what is unverified. When he',
   'wants something checked by ChatGPT, keep your answer checkable (claims + sources).'
@@ -45,6 +52,10 @@ const SYSTEM_PROMPT = [
 //   { role, content: string, imageDataUrl: string }  -> OpenAI-compatible
 //     vision format for that message only:
 //     content: [{ type: 'text', text }, { type: 'image_url', image_url: { url } }]
+//   { role, content: string, imageDataUrls: string[] } (v0.3.4: several
+//     images on one message) -> one image_url part per URL, after the
+//     text part. imageDataUrl and imageDataUrls may combine; a single
+//     image produces exactly the v0.3.3 shape above.
 // If NO message carries an image, the output is exactly [{ role, content }]
 // per message — the same shape chatCompletion sent before vision support.
 function toApiMessages(messages) {
@@ -54,12 +65,21 @@ function toApiMessages(messages) {
   return messages.map((message) => {
     const role = message && message.role;
     const content = message && typeof message.content === 'string' ? message.content : '';
+    const urls = [];
     if (message && typeof message.imageDataUrl === 'string' && message.imageDataUrl.length > 0) {
+      urls.push(message.imageDataUrl);
+    }
+    if (message && Array.isArray(message.imageDataUrls)) {
+      for (const url of message.imageDataUrls) {
+        if (typeof url === 'string' && url.length > 0) urls.push(url);
+      }
+    }
+    if (urls.length) {
       return {
         role,
         content: [
           { type: 'text', text: content },
-          { type: 'image_url', image_url: { url: message.imageDataUrl } }
+          ...urls.map((url) => ({ type: 'image_url', image_url: { url } }))
         ]
       };
     }
