@@ -11,7 +11,7 @@
   "scripts": {
     "start": "electron .",
     "check": "for f in main.js preload.js src/*.js renderer/*.js tests/*.js scripts/*.js; do node --check \"$f\" || exit 1; done && echo ALL FILES SYNTAX OK",
-    "test": "node tests/pathResolver.test.js && node tests/sessionGuard.test.js && node tests/vault.test.js && node tests/totp.test.js && node tests/noSecrets.test.js && node tests/regression.test.js && node tests/updater.test.js && node tests/lessons.test.js && node tests/sparkVision.test.js",
+    "test": "node tests/pathResolver.test.js && node tests/sessionGuard.test.js && node tests/vault.test.js && node tests/totp.test.js && node tests/noSecrets.test.js && node tests/regression.test.js && node tests/updater.test.js && node tests/lessons.test.js && node tests/sparkVision.test.js && node tests/attachments.test.js",
     "smoke": "xvfb-run -a npx electron tests/smoke-main.js",
     "dist": "electron-builder --win",
     "dist:linux": "electron-builder --linux zip",
