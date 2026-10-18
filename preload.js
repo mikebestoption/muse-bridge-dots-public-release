@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('desktop', {
   saveSettings: (payload) => ipcRenderer.invoke('settings:save', payload),
   clearKey: () => ipcRenderer.invoke('settings:clearKey'),
   clearVimeoToken: () => ipcRenderer.invoke('settings:clearVimeoToken'),
+  clearGithubToken: () => ipcRenderer.invoke('settings:clearGithubToken'),
   chooseBridgeFolder: () => ipcRenderer.invoke('settings:chooseBridgeFolder'),
 
   // The real on-disk path of a File the user dropped/picked, so main can
@@ -92,6 +93,14 @@ contextBridge.exposeInMainWorld('desktop', {
   videoUpdateDuration: (id, durationSec) => ipcRenderer.invoke('video:updateDuration', id, durationSec),
   sopGenerate: (payload) => ipcRenderer.invoke('sop:generate', payload),
   sopToLoop: (id) => ipcRenderer.invoke('sop:toLoop', id),
+
+  // Ask Muse (requests channel to the private repo's requests/ folder;
+  // list/refresh/send carry text + statuses only — never the token)
+  requestsList: () => ipcRenderer.invoke('requests:list'),
+  requestsRefresh: () => ipcRenderer.invoke('requests:refresh'),
+  requestsSend: (payload) => ipcRenderer.invoke('requests:send', payload),
+  requestsRetry: (id) => ipcRenderer.invoke('requests:retry', id),
+  requestsRemoveLocal: (id) => ipcRenderer.invoke('requests:removeLocal', id),
 
   // Generic local store for sessions + night queue (whitelisted keys in main)
   storeGet: (key) => ipcRenderer.invoke('store:get', key),

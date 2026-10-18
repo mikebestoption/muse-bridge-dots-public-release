@@ -1325,6 +1325,10 @@ function applySettings(s) {
   if (vimeoNote && s.hasVimeoToken) {
     vimeoNote.textContent = 'A Vimeo token is saved on this PC (encrypted by your operating system). Paste a new token to replace it, or use "Remove Vimeo token" below.';
   }
+  const githubNote = document.getElementById('github-note');
+  if (githubNote && s.hasGithubToken) {
+    githubNote.textContent = 'A GitHub token is saved on this PC (encrypted by your operating system). Ask Muse requests will be sent to the private repo. Paste a new token to replace it, or use "Remove GitHub token" below.';
+  }
   const autolockEl = document.getElementById('vault-autolock');
   if (autolockEl) autolockEl.value = Number.isFinite(s.vaultAutoLockMinutes) ? s.vaultAutoLockMinutes : 10;
   const handsIdleEl = document.getElementById('hands-idle-threshold');
@@ -1352,6 +1356,8 @@ function openSettings() {
   els.apiKey.value = '';
   const vimeoEl = document.getElementById('vimeo-token');
   if (vimeoEl) vimeoEl.value = '';
+  const githubEl = document.getElementById('github-token');
+  if (githubEl) githubEl.value = '';
   els.modal.classList.remove('hidden');
 }
 function closeSettings() {
@@ -1384,6 +1390,10 @@ async function saveSettings() {
   const vimeoToken = vimeoEl ? vimeoEl.value.trim() : '';
   if (vimeoToken) payload.vimeoToken = vimeoToken;
   if (vimeoEl) vimeoEl.value = '';
+  const githubEl = document.getElementById('github-token');
+  const githubToken = githubEl ? githubEl.value.trim() : '';
+  if (githubToken) payload.githubToken = githubToken;
+  if (githubEl) githubEl.value = '';
   const updated = await window.desktop.saveSettings(payload);
   applySettings(updated);
   closeSettings();
@@ -1640,6 +1650,11 @@ document.getElementById('clear-vimeo').addEventListener('click', async () => {
   const updated = await window.desktop.clearVimeoToken();
   applySettings(updated);
   setStatus('Vimeo token removed. Vimeo links will save metadata only until a token or file is provided.');
+});
+document.getElementById('clear-github').addEventListener('click', async () => {
+  const updated = await window.desktop.clearGithubToken();
+  applySettings(updated);
+  setStatus('GitHub token removed. Ask Muse will save drafts on this PC until a token is added again.');
 });
 document.getElementById('choose-bridge').addEventListener('click', async () => {
   const updated = await window.desktop.chooseBridgeFolder();
@@ -2124,6 +2139,186 @@ if (window.desktop.onVaultAutoLocked) {
   }
   els.input.focus();
 })();
+
+// ---------- Ask Muse panel (v0.4.1) ----------
+// Compose + track the requests Michael sends to Muse from inside the
+// app. All GitHub work happens in the main process (requests channel);
+// this panel only ever sees request text, statuses, and the hasToken
+// boolean — never the token itself.
+
+let requestsView = { items: [], hasToken: false, checkedAt: '', offline: false };
+
+function renderRequests() {
+  const list = document.getElementById('requests-list');
+  if (!list) return;
+  list.innerHTML = '';
+  const note = document.getElementById('requests-compose-note');
+  if (note) {
+    note.textContent = requestsView.hasToken
+      ? 'Sends to the private Muse Bridge repo — Muse picks requests up from there.'
+      : 'No GitHub token saved yet: Send saves a draft on this PC. Add your GitHub token in Settings to send requests to Muse.';
+  }
+  const checked = document.getElementById('requests-checked');
+  if (checked) {
+    if (!requestsView.hasToken) {
+      checked.textContent = 'Statuses update from the repo once a GitHub token is saved in Settings.';
+    } else if (requestsView.checkedAt) {
+      checked.textContent = `Last checked ${new Date(requestsView.checkedAt).toLocaleString()}${requestsView.offline ? ' — offline right now, showing the last check.' : ''}`;
+    } else {
+      checked.textContent = '';
+    }
+  }
+  if (!requestsView.items.length) {
+    const empty = document.createElement('div');
+    empty.className = 'inbox-empty';
+    empty.textContent = 'No requests yet. Type what you want above — a feature, a skill, a task, a question — and send it to Muse.';
+    list.appendChild(empty);
+    return;
+  }
+  for (const item of requestsView.items) {
+    list.appendChild(renderRequestCard(item));
+  }
+}
+
+function renderRequestCard(item) {
+  const card = document.createElement('div');
+  card.className = 'req-item';
+
+  const head = document.createElement('div');
+  head.className = 'a-head';
+  const title = document.createElement('span');
+  title.className = 'a-title';
+  title.textContent = item.title || item.id;
+  const chip = document.createElement('span');
+  chip.className = `chip ${item.status}`;
+  chip.textContent = item.statusLabel;
+  const kind = document.createElement('span');
+  kind.className = 'a-kind';
+  const when = item.createdAt ? new Date(item.createdAt).toLocaleString() : '';
+  kind.textContent = `${item.typeLabel} · ${when}${item.origin === 'remote' ? ' · sent from another PC' : ''}`;
+  head.appendChild(title);
+  head.appendChild(chip);
+  head.appendChild(kind);
+  card.appendChild(head);
+
+  if (item.text) {
+    const content = document.createElement('div');
+    content.className = 'a-content';
+    content.textContent = item.text;
+    card.appendChild(content);
+  }
+
+  if (item.statusNote) {
+    const note = document.createElement('div');
+    note.className = 'a-note';
+    note.textContent = `Muse: ${item.statusNote}`;
+    card.appendChild(note);
+  }
+  if (item.status === 'send-failed' && item.lastError) {
+    const err = document.createElement('div');
+    err.className = 'a-error';
+    err.textContent = `The send failed: ${item.lastError}`;
+    card.appendChild(err);
+  }
+  if (item.status === 'draft') {
+    const hint = document.createElement('div');
+    hint.className = 'a-note';
+    hint.textContent = 'Add your GitHub token in Settings to send this to Muse — until then it stays as a draft on this PC.';
+    card.appendChild(hint);
+  }
+
+  const row = document.createElement('div');
+  row.className = 'row';
+  if (item.canRetry) {
+    const retryBtn = document.createElement('button');
+    retryBtn.className = 'mini-btn large';
+    retryBtn.textContent = item.status === 'send-failed' ? '↻ Retry send' : '✉️ Send now';
+    retryBtn.addEventListener('click', async () => {
+      const res = await window.desktop.requestsRetry(item.id);
+      if (res && res.ok === false && res.error) setStatus(res.error);
+      else if (res && res.request && res.request.status === 'send-failed') {
+        setStatus(`The send failed again (${res.request.lastError || 'GitHub unreachable'}) — the request stays saved as a draft.`);
+      } else setStatus(`Request sent to Muse: "${item.title}"`);
+      const fresh = await window.desktop.requestsList();
+      requestsView = { ...requestsView, ...fresh };
+      renderRequests();
+    });
+    row.appendChild(retryBtn);
+  }
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'mini-btn large';
+  copyBtn.textContent = 'Copy request text';
+  copyBtn.addEventListener('click', async () => {
+    await window.desktop.writeClipboard(item.text || '');
+    setStatus('Request text copied — you can paste it anywhere.');
+  });
+  row.appendChild(copyBtn);
+  if (item.origin === 'draft') {
+    const delBtn = document.createElement('button');
+    delBtn.className = 'mini-btn large danger';
+    delBtn.textContent = 'Delete draft';
+    delBtn.addEventListener('click', async () => {
+      await window.desktop.requestsRemoveLocal(item.id);
+      const fresh = await window.desktop.requestsList();
+      requestsView = { ...requestsView, ...fresh };
+      renderRequests();
+      setStatus('Draft deleted.');
+    });
+    row.appendChild(delBtn);
+  }
+  card.appendChild(row);
+  return card;
+}
+
+async function loadRequests(fromRepo) {
+  try {
+    const fresh = fromRepo ? await window.desktop.requestsRefresh() : await window.desktop.requestsList();
+    if (fresh) requestsView = { ...requestsView, ...fresh };
+  } catch (_) { /* panel renders whatever it already has */ }
+  renderRequests();
+}
+
+// Ask Muse wiring
+document.getElementById('toggle-requests').addEventListener('click', async () => {
+  const panel = document.getElementById('requests-panel');
+  panel.classList.toggle('hidden');
+  if (!panel.classList.contains('hidden')) {
+    await loadRequests(false);
+    loadRequests(true);
+  }
+});
+document.getElementById('close-requests').addEventListener('click', () => {
+  document.getElementById('requests-panel').classList.add('hidden');
+});
+document.getElementById('requests-refresh').addEventListener('click', async () => {
+  await loadRequests(true);
+  setStatus(requestsView.offline ? 'Could not reach GitHub — showing the last check.' : 'Request statuses refreshed.');
+});
+document.getElementById('requests-send').addEventListener('click', async () => {
+  const typeEl = document.getElementById('requests-type');
+  const textEl = document.getElementById('requests-text');
+  const text = textEl.value;
+  if (!text.trim()) {
+    setStatus('Write what you want first — the request box is empty.');
+    return;
+  }
+  const res = await window.desktop.requestsSend({ type: typeEl.value, text });
+  if (!res || !res.ok) {
+    setStatus(`Ask Muse: ${res && res.error ? res.error : 'the request could not be saved.'}`);
+    return;
+  }
+  textEl.value = '';
+  const fresh = await window.desktop.requestsList();
+  requestsView = { ...requestsView, ...fresh };
+  renderRequests();
+  if (res.request.status === 'draft') {
+    setStatus('Saved as a draft on this PC — add your GitHub token in Settings to send it to Muse.');
+  } else if (res.request.status === 'send-failed') {
+    setStatus(`The send failed (${res.request.lastError || 'GitHub unreachable'}) — the request is saved below as a draft you can retry.`);
+  } else {
+    setStatus(`✉️ Request sent to Muse: "${res.request.title}" — its status will update here.`);
+  }
+});
 
 // ---------- Audit Signal system ----------
 // Statuses: not-requested (default for everything) → needs-audit (flagged,

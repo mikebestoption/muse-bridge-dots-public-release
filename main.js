@@ -26,6 +26,7 @@ const loopsCore = require('./src/loopsCore');
 const { createSopsStore, fetchVimeoOEmbed, fetchVimeoVideo, fetchVimeoTranscript, mockSop } = require('./src/sops');
 const sopCore = require('./src/sopCore');
 const { createVideoStore, MAX_VIDEO_BYTES } = require('./src/videoFiles');
+const { createRequestsChannel } = require('./src/githubRequests');
 
 let settings = null;
 let mainWindow = null;
@@ -35,6 +36,7 @@ let updater = null;
 let loops = null;
 let sops = null;
 let videos = null;
+let requestsChannel = null;
 
 // Staged videos are served to the renderer's hidden <video> element for
 // frame sampling through a private scheme (streaming, range-capable),
@@ -205,6 +207,7 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('settings:clearKey', () => settings.clearKey());
   ipcMain.handle('settings:clearVimeoToken', () => settings.clearVimeoToken());
+  ipcMain.handle('settings:clearGithubToken', () => settings.clearGithubToken());
   ipcMain.handle('settings:chooseBridgeFolder', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
       properties: ['openDirectory', 'createDirectory'],
@@ -248,6 +251,34 @@ app.whenReady().then(() => {
   ipcMain.handle('lessons:remove', (_e, id) => (lessons ? lessons.remove(id) : false));
   ipcMain.handle('lessons:context', () => (lessons ? lessons.getContext() : ''));
   ipcMain.handle('lessons:image', (_e, id) => (lessons ? lessons.getImageDataUrl(id) : null));
+
+  // ---- Ask Muse IPC (v0.4.1) ----
+  // The channel talks to the private repo's requests/ folder ONLY,
+  // with the Settings GitHub token. The renderer sees request text,
+  // statuses, and hasToken booleans — never the token itself.
+  requestsChannel = createRequestsChannel({
+    userDataPath: app.getPath('userData'),
+    getToken: () => settings.getGithubToken(),
+    appVersion: app.getVersion()
+  });
+  const requestsError = (err) => ({ ok: false, error: err.message });
+  ipcMain.handle('requests:list', () => requestsChannel.list());
+  ipcMain.handle('requests:refresh', async () => requestsChannel.refresh());
+  ipcMain.handle('requests:send', async (_e, payload) => {
+    try {
+      return await requestsChannel.compose(payload || {});
+    } catch (err) {
+      return requestsError(err);
+    }
+  });
+  ipcMain.handle('requests:retry', async (_e, id) => {
+    try {
+      return await requestsChannel.retry(id);
+    } catch (err) {
+      return requestsError(err);
+    }
+  });
+  ipcMain.handle('requests:removeLocal', (_e, id) => (requestsChannel ? requestsChannel.removeLocal(id) : false));
 
   // ---- Loops IPC ----
   // CRUD over the pure store; the runner itself lives in the renderer

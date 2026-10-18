@@ -50,6 +50,12 @@
       </div>
 
       <div class="side-section">
+        <div class="side-heading"><span>Ask Muse</span></div>
+        <button id="toggle-requests" class="side-btn">✉️ Ask Muse</button>
+        <div class="side-note">Want a feature, a skill, or a task done? Type it here in plain words and the app sends it to Muse through the private GitHub repo — no need to open the Muse chat. Muse works it, and the result comes back as an app update (or an answer, for questions).</div>
+      </div>
+
+      <div class="side-section">
         <div class="side-heading"><span>Dot test runner</span></div>
         <button id="open-dot-test" class="side-btn">🧪 Run tests with Dot</button>
         <div class="side-note">Builds a test packet, sends it to Dot (clipboard or Outbox), and logs Dot's verdicts back here + to test-log.md in the Bridge folder.</div>
@@ -197,6 +203,37 @@
         <datalist id="vault-label-list"></datalist>
       </section>
 
+      <section id="requests-panel" class="drawer hidden">
+        <div class="drawer-head">
+          <strong>✉️ Ask Muse</strong>
+          <span class="drawer-sub">Type what you want in plain words — an app feature, a new skill, a task for Muse, or a question. Sending files it to the private Muse Bridge repo, where Muse picks it up; the status below tracks it (Sent → Seen → Building → Shipped, or Answered for questions). Shipped features arrive as a normal app update.</span>
+          <span class="grow"></span>
+          <button id="requests-refresh" class="mini-btn large">↻ Refresh statuses</button>
+          <button id="close-requests" class="mini-btn large">Close</button>
+        </div>
+        <div class="drawer-body">
+          <div class="req-compose">
+            <div class="v-form-title">New request</div>
+            <label class="field-label" for="requests-type">What kind of request is it?</label>
+            <select id="requests-type">
+              <option value="feature">App feature</option>
+              <option value="skill">New skill</option>
+              <option value="task">Task for Muse</option>
+              <option value="question">Question</option>
+            </select>
+            <label class="field-label" for="requests-text">Tell Muse what you want — plain words</label>
+            <textarea id="requests-text" rows="4" placeholder="e.g. Hey, I want you to add a dark-mode toggle to the app…"></textarea>
+            <div class="row">
+              <button id="requests-send" class="primary">✉️ Send to Muse</button>
+              <span id="requests-compose-note" class="side-note" style="margin:0"></span>
+            </div>
+          </div>
+          <h3 class="sop-heading">Your requests</h3>
+          <div id="requests-checked" class="side-note"></div>
+          <div id="requests-list"></div>
+        </div>
+      </section>
+
       <div id="composer-wrap">
         <div id="status-line"></div>
         <div id="attachments-row" class="attachments-row hidden"></div>
@@ -247,6 +284,13 @@
       <div class="field-note" id="vimeo-note">Lets the app read captions and downloadable files from YOUR Vimeo recordings so a pasted link can be analyzed. Stored only on this PC, encrypted by your operating system, exactly like your API key — and never sent anywhere except api.vimeo.com. Without it, a Vimeo link saves its title/thumbnail only; add the video file itself to analyze the recording.</div>
       <div class="row">
         <button id="clear-vimeo" class="danger">Remove Vimeo token</button>
+      </div>
+
+      <label class="field-label" for="github-token">GitHub token (for Ask Muse)</label>
+      <input id="github-token" type="password" placeholder="Paste fine-grained token" autocomplete="off" />
+      <div class="field-note" id="github-note">Fine-grained token, only the mikebestoption-Muse-Bridge repo, Contents: Read and write. This lets the app send your requests to Muse. Stored only on this PC, encrypted by your operating system, exactly like your API key — and used for nothing except the requests folder of that one repo. Without it, Ask Muse saves your requests as drafts on this PC instead of sending them.</div>
+      <div class="row">
+        <button id="clear-github" class="danger">Remove GitHub token</button>
       </div>
 
       <label class="field-label" for="model">Model</label>
@@ -306,6 +350,7 @@
   <script src="../src/loopsCore.js"></script>
   <script src="../src/sopCore.js"></script>
   <script src="../src/loopRunner.js"></script>
+  <script src="../src/requestsCore.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>
