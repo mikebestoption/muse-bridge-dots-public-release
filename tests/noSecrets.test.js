@@ -189,6 +189,57 @@ const LABEL = 'Test Bank';
   })) });
   artifacts['SOP->Loop draft JSON'] = JSON.stringify(sopDraft);
 
+  // 9) v0.4.1 Ask Muse artifacts: a GitHub token used by the requests
+  //    channel must never land in the local requests store, the request
+  //    file that goes to the repo, or anything the channel returns.
+  //    (Fake GitHub over injected fetch — no network in tests.)
+  const FAKE_GH_TOKEN = 'FAKE-GH-TOKEN-nosecrets-12345';
+  const { createRequestsChannel } = require('../src/githubRequests');
+  const ghFiles = new Map();
+  const ghFetch = async (url, opts = {}) => {
+    const method = opts.method || 'GET';
+    const p = decodeURIComponent(/\/contents\/(.+)$/.exec(url)[1]);
+    const json = (status, obj) => ({ ok: status >= 200 && status < 300, status, json: async () => obj });
+    if (method === 'GET' && p === 'requests') {
+      const entries = new Map();
+      for (const key of ghFiles.keys()) {
+        const rest = key.slice('requests/'.length);
+        const first = rest.split('/')[0];
+        entries.set(first, rest.includes('/')
+          ? { name: first, path: `requests/${first}`, type: 'dir' }
+          : { name: first, path: key, type: 'file' });
+      }
+      return json(200, [...entries.values()]);
+    }
+    if (method === 'GET') {
+      if (!ghFiles.has(p)) return json(404, { message: 'Not Found' });
+      return json(200, { encoding: 'base64', content: Buffer.from(ghFiles.get(p), 'utf8').toString('base64') });
+    }
+    if (method === 'PUT') {
+      const body = JSON.parse(opts.body);
+      ghFiles.set(p, Buffer.from(body.content, 'base64').toString('utf8'));
+      return json(201, { commit: { sha: 'fake' }, content: { path: p } });
+    }
+    return json(405, { message: 'Method Not Allowed' });
+  };
+  const reqDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mb-req-nosecrets-'));
+  const channel = createRequestsChannel({
+    userDataPath: reqDir, getToken: () => FAKE_GH_TOKEN, hostname: 'TEST-PC',
+    appVersion: '0.4.1', fetchImpl: ghFetch, now: () => new Date('2026-10-18T09:15:00.000Z')
+  });
+  const sentReq = await channel.compose({ type: 'feature', text: 'Ask Muse redaction check' });
+  ghFiles.set(`requests/${sentReq.request.id}/status.md`, 'status: building\n---\nOn it.');
+  const refreshed = await channel.refresh();
+  const reqArtifacts = {
+    'requests-local.json': fs.readFileSync(path.join(reqDir, 'requests-local.json'), 'utf8'),
+    'request file sent to repo': ghFiles.get(`requests/${sentReq.request.id}.md`),
+    'requests list JSON': JSON.stringify(refreshed)
+  };
+  for (const [name, text] of Object.entries(reqArtifacts)) {
+    assert.ok(!String(text).includes(FAKE_GH_TOKEN), `${name} MUST NOT contain the GitHub token`);
+  }
+  artifacts['Ask Muse artifacts (token-checked separately)'] = 'see section 9';
+
   // THE ASSERTIONS: no artifact may contain the password or the code.
   for (const [name, text] of Object.entries(artifacts)) {
     assert.ok(!text.includes(FAKE_PW), `${name} MUST NOT contain the password`);

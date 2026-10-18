@@ -24,6 +24,11 @@
 //      mock SOP is generated from a transcript, converted into a draft
 //      loop, and exported; the frame sampler fails honestly on the
 //      non-video fixture instead of faking frames.
+//   7. v0.4.1 Ask Muse: with no GitHub token, composing a request in
+//      the panel saves an honest local draft (status chip + the
+//      add-your-token note + Copy fallback — never a fake send); the
+//      Settings token field round-trips (hasGithubToken boolean only)
+//      and settings.json never holds the token in plaintext.
 // Prints SMOKE PASS and exits 0, or SMOKE FAIL and exits 1.
 
 const fs = require('fs');
@@ -330,6 +335,61 @@ const LOOPS_SCRIPT = `
 })()
 `;
 
+// v0.4.1: Ask Muse — the no-token draft circuit in the real app.
+// No GitHub token exists in the smoke userData, so Send must produce an
+// honest local draft (never a fake send), the draft card must carry the
+// "add your token" note + Copy fallback, and the Settings token field
+// must round-trip through the real store (hasGithubToken boolean only).
+const REQUESTS_SCRIPT = `
+(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const checks = [];
+  if (!window.MuseRequestsCore) throw new Error('window.MuseRequestsCore missing — src/requestsCore.js did not load');
+  checks.push('requests core module loaded in renderer');
+
+  const pub0 = await window.desktop.getSettings();
+  if (pub0.hasGithubToken !== false) throw new Error('fresh smoke profile should have no GitHub token');
+  checks.push('settings report hasGithubToken=false at first run');
+
+  document.getElementById('toggle-requests').click();
+  await sleep(600);
+  const panel = document.getElementById('requests-panel');
+  if (panel.classList.contains('hidden')) throw new Error('requests panel did not open');
+  checks.push('Ask Muse panel opens');
+
+  const typeEl = document.getElementById('requests-type');
+  typeEl.value = 'feature';
+  const textEl = document.getElementById('requests-text');
+  textEl.value = 'Smoke: please add a dark mode toggle';
+  document.getElementById('requests-send').click();
+  let listText = '';
+  for (let i = 0; i < 20; i++) {
+    await sleep(300);
+    listText = document.getElementById('requests-list').innerText || '';
+    if (listText.includes('dark mode')) break;
+  }
+  if (!listText.includes('dark mode')) throw new Error('draft request did not render: ' + listText);
+  if (!listText.includes('Draft')) throw new Error('draft status chip missing: ' + listText);
+  if (!listText.includes('Add your GitHub token in Settings')) throw new Error('honest no-token note missing: ' + listText);
+  if (!listText.includes('Copy request text')) throw new Error('copy fallback button missing');
+  if (textEl.value !== '') throw new Error('composer did not clear after save');
+  checks.push('no-token Send saves an honest draft card (note + copy fallback, no fake send)');
+
+  // Settings token round-trip through the real store: boolean only.
+  await window.desktop.saveSettings({ githubToken: 'smoke-fake-gh-token' });
+  const pub1 = await window.desktop.getSettings();
+  if (pub1.hasGithubToken !== true) throw new Error('hasGithubToken did not flip true after save');
+  checks.push('GitHub token saves (hasGithubToken=true, value never rendered back)');
+  await window.desktop.clearGithubToken();
+  const pub2 = await window.desktop.getSettings();
+  if (pub2.hasGithubToken !== false) throw new Error('hasGithubToken did not flip back after clear');
+  checks.push('GitHub token clears');
+
+  document.getElementById('close-requests').click();
+  return checks;
+})()
+`;
+
 // v0.3.2: small-viewport panel layout assertions. Run after PAGE_SCRIPT at
 // each window size; throws (failing the smoke) on the first violation.
 const LAYOUT_SCRIPT = `
@@ -372,6 +432,7 @@ const LAYOUT_SCRIPT = `
     { open: 'toggle-vault', panel: 'vault-panel', close: 'close-vault', name: 'Vault' },
     { open: 'toggle-terminals', panel: 'terminals-panel', close: 'close-terminals', name: 'Terminals' },
     { open: 'toggle-loops', panel: 'loops-panel', close: 'close-loops', name: 'Loops' },
+    { open: 'toggle-requests', panel: 'requests-panel', close: 'close-requests', name: 'Ask Muse' },
     { open: 'toggle-night', panel: 'night-panel', close: 'close-night', name: 'Night Queue' }
   ];
   for (const d of drawers) {
@@ -426,6 +487,17 @@ app.whenReady().then(async () => {
     await win.webContents.executeJavaScript(`window.__SMOKE_VIDEO_PATH = ${JSON.stringify(fixtureVideo)}; true;`);
     const loopChecks = await win.webContents.executeJavaScript(LOOPS_SCRIPT);
     for (const c of loopChecks) console.log('  ✓', c);
+    // v0.4.1: Ask Muse no-token draft circuit + token settings round-trip.
+    const reqChecks = await win.webContents.executeJavaScript(REQUESTS_SCRIPT);
+    for (const c of reqChecks) console.log('  ✓', c);
+    // The fake token the page saved must be encrypted at rest, never plaintext.
+    const settingsOnDisk = fs.readFileSync(path.join(tmp, 'settings.json'), 'utf8');
+    if (settingsOnDisk.includes('smoke-fake-gh-token')) {
+      console.log('SMOKE FAIL: settings.json contains the GitHub token in plaintext');
+      app.exit(1);
+      return;
+    }
+    console.log('  ✓ settings.json holds no plaintext GitHub token');
     // v0.3.2: panel layout at desktop and small/scaled window sizes.
     for (const [w, h] of [[1280, 720], [1024, 640]]) {
       win.setSize(w, h);
