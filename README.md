@@ -1,4 +1,4 @@
-# Muse Bridge — v0.4.2 (Loops at the top)
+# Muse Bridge — v0.4.3 (Best Option mark icon)
 
 **Muse Bridge** is a free, open-source desktop app for Windows,
 powered by Muse Spark (Meta Model API). It is published under the
@@ -12,6 +12,14 @@ if you would like to propose an improvement. It has three jobs:
 3. **Bridge ChatGPT (Dot) and Muse** — the two-engine cross-check loop:
    ChatGPT results come in, Muse Spark reviews them; Muse Spark results go
    out as "verify this" packets; Dot's audit feedback comes back and gets logged.
+
+## Changes in 0.4.3
+
+- **Best Option mark is now the app icon — everywhere.** The window
+  title bar, the Windows taskbar, the installer, and the Start Menu /
+  Desktop shortcuts now all show the Best Option "bo" mark (the logo
+  symbol only, no words), replacing the old Muse Bridge swirl that
+  lingered on the taskbar in 0.4.2. Icon only — no other change.
 
 ## Changes in 0.4.2
 

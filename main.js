@@ -127,6 +127,7 @@ function createWindow() {
     minWidth: 860,
     minHeight: 560,
     backgroundColor: '#ffffff',
+    icon: path.join(__dirname, 'renderer', 'bestoption-mark.png'),
     title: 'Muse Bridge',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),

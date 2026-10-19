@@ -1,4 +1,4 @@
-; Muse Bridge 0.4.2 — native-compiled NSIS installer
+; Muse Bridge 0.4.3 — native-compiled NSIS installer
 ; Hand-written fallback for the electron-builder NSIS target, compiled with the
 ; native Linux makensis (the wine-based builder cannot execute 32-bit PE on
 ; the build VM). Install behavior is identical to the electron-builder NSIS
@@ -8,19 +8,19 @@
 !include "MUI2.nsh"
 
 !define PRODUCT_NAME "Muse Bridge"
-!define PRODUCT_VERSION "0.4.2"
+!define PRODUCT_VERSION "0.4.3"
 !define PRODUCT_PUBLISHER "Best Option Funding Inc."
 !define APP_EXE "Muse Bridge.exe"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\MuseBridge"
 !define SRC_DIR "dist\win-unpacked"
 
 Name "${PRODUCT_NAME}"
-OutFile "dist\MuseBridge-0.4.2-setup.exe"
+OutFile "dist\MuseBridge-0.4.3-setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\Muse Bridge"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 
-VIProductVersion "0.4.2.0"
+VIProductVersion "0.4.3.0"
 VIAddVersionKey "ProductName" "${PRODUCT_NAME}"
 VIAddVersionKey "ProductVersion" "${PRODUCT_VERSION}"
 VIAddVersionKey "CompanyName" "${PRODUCT_PUBLISHER}"
@@ -43,6 +43,10 @@ Function .onInit
   !insertmacro CloseRunningApp
 FunctionEnd
 
+; ---- Installer / uninstaller icon (Best Option mark) ----
+!define MUI_ICON "build\icon.ico"
+!define MUI_UNICON "build\icon.ico"
+
 ; ---- Pages ----
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
@@ -64,9 +68,12 @@ Section "Install"
   SetOutPath "$INSTDIR"
   File /r "${SRC_DIR}\*.*"
 
-  ; Shortcuts: Start Menu (user Programs) + Desktop
-  CreateShortCut "$SMPROGRAMS\Muse Bridge.lnk" "$INSTDIR\${APP_EXE}"
-  CreateShortCut "$DESKTOP\Muse Bridge.lnk" "$INSTDIR\${APP_EXE}"
+  ; Best Option mark icon, referenced by the shortcuts + uninstall entry
+  File "/oname=bestoption-mark.ico" "build\icon.ico"
+
+  ; Shortcuts: Start Menu (user Programs) + Desktop (Best Option mark icon)
+  CreateShortCut "$SMPROGRAMS\Muse Bridge.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\bestoption-mark.ico"
+  CreateShortCut "$DESKTOP\Muse Bridge.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\bestoption-mark.ico"
 
   ; Uninstaller + HKCU uninstall entry (Settings -> Apps)
   WriteUninstaller "$INSTDIR\Uninstall.exe"
@@ -74,7 +81,7 @@ Section "Install"
   WriteRegStr HKCU "${UNINST_KEY}" "DisplayVersion" "${PRODUCT_VERSION}"
   WriteRegStr HKCU "${UNINST_KEY}" "Publisher" "${PRODUCT_PUBLISHER}"
   WriteRegStr HKCU "${UNINST_KEY}" "InstallLocation" "$INSTDIR"
-  WriteRegStr HKCU "${UNINST_KEY}" "DisplayIcon" "$INSTDIR\${APP_EXE}"
+  WriteRegStr HKCU "${UNINST_KEY}" "DisplayIcon" "$INSTDIR\bestoption-mark.ico"
   WriteRegStr HKCU "${UNINST_KEY}" "UninstallString" '"$INSTDIR\Uninstall.exe"'
   WriteRegDWORD HKCU "${UNINST_KEY}" "NoModify" 1
   WriteRegDWORD HKCU "${UNINST_KEY}" "NoRepair" 1
