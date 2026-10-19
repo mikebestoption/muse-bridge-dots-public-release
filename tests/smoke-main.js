@@ -16,7 +16,8 @@
 //      the native file input is invisible, the drop overlay shows on
 //      dragenter and cancels on Escape, and a simulated drop stages a
 //      document chip (and refuses a binary with an honest note).
-//   6. v0.4.0 Loops + Teach-from-video: core modules load in the
+//   6. v0.4.0 Loops + Teach-from-video (v0.4.2: Loops opens at the
+//      top, full-height, closing other drawers): core modules load in the
 //      renderer; a loop with prompt/instruction/note steps is created
 //      via the real store, reordered in the builder UI, saved, and run
 //      in mock mode to completion (instruction step via its Done tap);
@@ -255,11 +256,26 @@ const LOOPS_SCRIPT = `
   checks.push('loop created through the real IPC store');
 
   // Open the Loops panel; the list shows the loop and the Night Queue
-  // loop picker is populated.
+  // loop picker is populated. v0.4.2 regression: open Terminals FIRST
+  // (the stacking case Kelly screenshotted) — clicking Loops must close
+  // Terminals, put Loops at the TOP of the main column (directly under
+  // the chat header, before the messages), step the chat aside and give
+  // the panel the full height instead of the 46vh drawer cap.
+  document.getElementById('toggle-terminals').click();
+  await sleep(300);
+  if (document.getElementById('terminals-panel').classList.contains('hidden')) throw new Error('terminals panel did not open (precondition)');
   document.getElementById('toggle-loops').click();
   await sleep(500);
   const panel = document.getElementById('loops-panel');
   if (panel.classList.contains('hidden')) throw new Error('loops panel did not open');
+  if (!document.getElementById('terminals-panel').classList.contains('hidden')) throw new Error('v0.4.2: opening Loops did not close Terminals — Loops would stack underneath it');
+  if (!document.getElementById('main').classList.contains('loops-open')) throw new Error('v0.4.2: <main> is not in loops-open mode');
+  if (getComputedStyle(document.getElementById('messages')).display !== 'none') throw new Error('v0.4.2: chat messages did not step aside while Loops is open');
+  const headerBottom = document.getElementById('chat-header').getBoundingClientRect().bottom;
+  const panelR = panel.getBoundingClientRect();
+  if (Math.abs(panelR.top - headerBottom) > 2) throw new Error('v0.4.2: Loops panel is not at the top (top=' + Math.round(panelR.top) + ', header bottom=' + Math.round(headerBottom) + ')');
+  if (panelR.height <= window.innerHeight * 0.46) throw new Error('v0.4.2: Loops panel is still capped like a drawer (height=' + Math.round(panelR.height) + ' of viewport ' + window.innerHeight + ')');
+  checks.push('v0.4.2: Loops opens at the top, full-height, Terminals closed, chat stepped aside');
   if (!document.getElementById('loops-list-view').innerText.includes('Smoke loop')) throw new Error('loop missing from the list view');
   const nightSel = document.getElementById('night-loop-select');
   if (![...nightSel.options].some((o) => o.value === created.loop.id)) throw new Error('night queue loop picker not populated');

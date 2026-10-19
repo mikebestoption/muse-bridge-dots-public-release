@@ -1,4 +1,4 @@
-# Muse Bridge — v0.4.1 (Ask Muse)
+# Muse Bridge — v0.4.2 (Loops at the top)
 
 **Muse Bridge** is a free, open-source desktop app for Windows,
 powered by Muse Spark (Meta Model API). It is published under the
@@ -12,6 +12,27 @@ if you would like to propose an improvement. It has three jobs:
 3. **Bridge ChatGPT (Dot) and Muse** — the two-engine cross-check loop:
    ChatGPT results come in, Muse Spark reviews them; Muse Spark results go
    out as "verify this" packets; Dot's audit feedback comes back and gets logged.
+
+## Changes in 0.4.2
+
+- **🔁 Loops now opens at the top, full-height.** Clicking **Loops**
+  used to open its panel underneath the chat and any panel already
+  open (e.g. Terminals), squeezed into the small drawer height — the
+  builder was hard to use. Now the Loops panel sits directly under
+  the chat header, opening it closes the other panels, the chat steps
+  aside while Loops is open, and the panel takes the full height
+  between the header and the composer (only its body scrolls). Click
+  **Close** (or open another panel) and the chat comes back exactly
+  as it was. The same applies when a loop builder or run opens from
+  an SOP conversion.
+- **☀️ New light theme — Best Option colors.** The all-black theme is
+  gone. The app is now majority white with easy-on-the-eyes slate
+  text, in Best Option's own palette (bestoption.co): site blue
+  `#046bd2` for buttons and actions, brand sky `#00aeef` as the
+  highlight, soft blue-gray panels — and no orange anywhere. The
+  Best Option logo sits at the top of the sidebar, the Best Option
+  mark is now the app/taskbar/installer icon, and the publisher is
+  **Best Option Funding Inc.**
 
 ## Changes in 0.4.1
 

@@ -1,5 +1,5 @@
 {
-  "author": "Michael Rodriguez",
+  "author": "Best Option Funding Inc.",
   "description": "Muse Bridge \u2014 Muse Spark desktop app: chat with Muse Spark, run approval-gated desktop tasks, and bridge results between ChatGPT (Dot) and Muse via clipboard + a shared Bridge folder.",
   "license": "Apache-2.0",
   "main": "main.js",
@@ -17,7 +17,7 @@
     "dist:linux": "electron-builder --linux zip",
     "scrub": "node scripts/scrub-audit.js"
   },
-  "version": "0.4.1",
+  "version": "0.4.2",
   "dependencies": {
     "electron-updater": "^6.8.9"
   },
@@ -37,6 +37,7 @@
       "LICENSE"
     ],
     "win": {
+      "icon": "build/icon.png",
       "target": [
         "nsis",
         "portable"

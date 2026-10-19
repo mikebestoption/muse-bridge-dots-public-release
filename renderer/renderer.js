@@ -1591,6 +1591,7 @@ window.addEventListener('keydown', (e) => {
   }
 });
 document.getElementById('toggle-lessons').addEventListener('click', () => {
+  if (document.getElementById('lessons-panel').classList.contains('hidden')) closeLoopsPanel();
   document.getElementById('lessons-panel').classList.toggle('hidden');
   renderLessons();
   renderSops();
@@ -1696,6 +1697,7 @@ document.getElementById('dot-simulate').addEventListener('click', async () => {
 
 // Terminals panel
 document.getElementById('toggle-terminals').addEventListener('click', () => {
+  if (els.terminalsPanel.classList.contains('hidden')) closeLoopsPanel();
   els.terminalsPanel.classList.toggle('hidden');
   renderTerminals();
 });
@@ -1722,6 +1724,7 @@ document.getElementById('add-terminal').addEventListener('click', async () => {
 
 // Night panel
 document.getElementById('toggle-night').addEventListener('click', () => {
+  if (els.nightPanel.classList.contains('hidden')) closeLoopsPanel();
   els.nightPanel.classList.toggle('hidden');
   renderNight();
 });
@@ -2099,6 +2102,7 @@ function renderVaultForm(editing) {
 
 // Vault wiring
 document.getElementById('toggle-vault').addEventListener('click', async () => {
+  if (els.vaultPanel.classList.contains('hidden')) closeLoopsPanel();
   els.vaultPanel.classList.toggle('hidden');
   if (!els.vaultPanel.classList.contains('hidden')) await refreshVault();
 });
@@ -2281,6 +2285,7 @@ async function loadRequests(fromRepo) {
 // Ask Muse wiring
 document.getElementById('toggle-requests').addEventListener('click', async () => {
   const panel = document.getElementById('requests-panel');
+  if (panel.classList.contains('hidden')) closeLoopsPanel();
   panel.classList.toggle('hidden');
   if (!panel.classList.contains('hidden')) {
     await loadRequests(false);
@@ -2546,6 +2551,7 @@ async function attachVerdict(item, raw, source) {
 
 // Audit wiring
 document.getElementById('toggle-audits').addEventListener('click', () => {
+  if (document.getElementById('audits-panel').classList.contains('hidden')) closeLoopsPanel();
   document.getElementById('audits-panel').classList.toggle('hidden');
   renderAudits();
 });
@@ -2582,6 +2588,33 @@ let loopDraft = null; // { id|null, name, description, steps[] } while building
 let activeLoopRun = null; // { runner, loop } while the run view is live
 let loopApprovalResolve = null;
 let loopInstructionResolve = null;
+
+// Loops at the top (v0.4.2): the panel lives directly under the chat
+// header, before the messages. Opening it closes every other drawer
+// (so it can never end up stacked underneath Terminals again) and puts
+// <main> into loops-open mode, where CSS steps the chat aside and the
+// panel takes the full height. Closing it restores the chat.
+function openLoopsPanel() {
+  for (const id of ['audits-panel', 'lessons-panel', 'vault-panel', 'terminals-panel', 'night-panel', 'requests-panel']) {
+    const el = document.getElementById(id);
+    if (el) el.classList.add('hidden');
+  }
+  const panel = document.getElementById('loops-panel');
+  if (!panel) return;
+  panel.classList.remove('hidden');
+  const main = document.getElementById('main');
+  if (main) main.classList.add('loops-open');
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => { try { panel.scrollIntoView({ block: 'start' }); } catch (_) { /* cosmetic */ } });
+  }
+}
+
+function closeLoopsPanel() {
+  const panel = document.getElementById('loops-panel');
+  if (panel) panel.classList.add('hidden');
+  const main = document.getElementById('main');
+  if (main) main.classList.remove('loops-open');
+}
 
 function showLoopsView(name) {
   for (const [id, view] of [
@@ -2745,7 +2778,7 @@ function openLoopBuilder(loop) {
     : { id: null, name: '', description: '', steps: [] };
   renderLoopBuilder();
   showLoopsView('builder');
-  document.getElementById('loops-panel').classList.remove('hidden');
+  openLoopsPanel();
 }
 
 function loopField(labelText, control) {
@@ -2968,7 +3001,7 @@ const LOOP_STEP_ICONS = {
 
 function openLoopRun(loop) {
   showLoopsView('run');
-  document.getElementById('loops-panel').classList.remove('hidden');
+  openLoopsPanel();
   const view = document.getElementById('loops-run-view');
   view.innerHTML = '';
 
@@ -3177,14 +3210,13 @@ function openLoopRun(loop) {
 // Loops wiring
 document.getElementById('toggle-loops').addEventListener('click', async () => {
   const panel = document.getElementById('loops-panel');
-  panel.classList.toggle('hidden');
-  if (!panel.classList.contains('hidden')) {
-    await refreshLoops();
-    if (!activeLoopRun || !document.getElementById('loops-run-view').children.length) showLoopsView('list');
-  }
+  if (!panel.classList.contains('hidden')) { closeLoopsPanel(); return; }
+  openLoopsPanel();
+  await refreshLoops();
+  if (!activeLoopRun || !document.getElementById('loops-run-view').children.length) showLoopsView('list');
 });
 document.getElementById('close-loops').addEventListener('click', () => {
-  document.getElementById('loops-panel').classList.add('hidden');
+  closeLoopsPanel();
 });
 document.getElementById('loops-new').addEventListener('click', () => openLoopBuilder(null));
 

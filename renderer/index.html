@@ -10,10 +10,13 @@
   <div id="app">
     <aside id="sidebar">
       <div class="brand">
-        <div class="brand-mark">✦</div>
-        <div>
-          <div class="brand-name">Muse Bridge</div>
-          <div class="brand-sub">Muse Spark · Desktop · Dot</div>
+        <img class="brand-logo" src="bestoption-logo.svg" alt="Best Option" />
+        <div class="brand-row">
+          <div class="brand-mark">✦</div>
+          <div>
+            <div class="brand-name">Muse Bridge</div>
+            <div class="brand-sub">Muse Spark · Desktop · Dot</div>
+          </div>
         </div>
       </div>
 
@@ -89,6 +92,23 @@
         <span class="grow"></span>
         <span class="chat-sub">Dot audits what you flag — statuses ride on every result, job and terminal.</span>
       </div>
+      <section id="loops-panel" class="drawer hidden">
+        <div class="drawer-head">
+          <strong>🔁 Loops</strong>
+          <span class="drawer-sub">Reusable workflows, built step by step like n8n: prompts to Muse Spark, desktop tasks, vault fills, manual steps, and notes. Running a loop shows each step as it goes — task and fill steps still go through their own approval cards; a loop never bypasses approvals. Run one overnight by adding it to the Night Queue.</span>
+          <span class="grow"></span>
+          <button id="loops-new" class="mini-btn large">+ New loop</button>
+          <button id="close-loops" class="mini-btn large">Close</button>
+        </div>
+        <div class="drawer-body">
+          <div id="loops-list-view"></div>
+          <div id="loops-builder-view" class="hidden"></div>
+          <div id="loops-doc-view" class="hidden"></div>
+          <div id="loops-run-view" class="hidden"></div>
+        </div>
+        <datalist id="vault-label-list"></datalist>
+      </section>
+
       <div id="messages"></div>
 
       <section id="audits-panel" class="drawer hidden">
@@ -184,23 +204,6 @@
           <button id="night-clear" class="mini-btn large">Clear finished</button>
           <span id="night-status" class="drawer-sub"></span>
         </div>
-      </section>
-
-      <section id="loops-panel" class="drawer hidden">
-        <div class="drawer-head">
-          <strong>🔁 Loops</strong>
-          <span class="drawer-sub">Reusable workflows, built step by step like n8n: prompts to Muse Spark, desktop tasks, vault fills, manual steps, and notes. Running a loop shows each step as it goes — task and fill steps still go through their own approval cards; a loop never bypasses approvals. Run one overnight by adding it to the Night Queue.</span>
-          <span class="grow"></span>
-          <button id="loops-new" class="mini-btn large">+ New loop</button>
-          <button id="close-loops" class="mini-btn large">Close</button>
-        </div>
-        <div class="drawer-body">
-          <div id="loops-list-view"></div>
-          <div id="loops-builder-view" class="hidden"></div>
-          <div id="loops-doc-view" class="hidden"></div>
-          <div id="loops-run-view" class="hidden"></div>
-        </div>
-        <datalist id="vault-label-list"></datalist>
       </section>
 
       <section id="requests-panel" class="drawer hidden">
