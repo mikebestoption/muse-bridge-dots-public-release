@@ -12,6 +12,11 @@
 //   { kind: 'image' }       — a vision-format image (png / jpeg / webp)
 //   { kind: 'document' }    — readable as text; content rides in the
 //                             outgoing message inside a document block
+//   { kind: 'pdf' }         — a PDF (v0.4.4): the caller hands the raw
+//                             bytes to the main process, which extracts
+//                             the text (src/pdfText.js); the extracted
+//                             text then stages as a document, capped
+//                             and blocked exactly like a text file
 //   { kind: 'unsupported' } — cannot be read; the caller must say so
 //                             honestly and never silently drop the file
 //
@@ -37,6 +42,7 @@
   const IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
 
   const MAX_IMAGE_BYTES = 8 * 1024 * 1024; // matches the Teach-mode cap
+  const MAX_PDF_BYTES = 25 * 1024 * 1024; // raw PDF cap (extracted text is capped separately)
   const DOC_CAP_BYTES = 100 * 1024; // per-file text cap in a message
   const DOC_CAP_LABEL = '100 KB';
   const SNIFF_BYTES = 1024; // how much of a file classification samples
@@ -92,6 +98,27 @@
     return { kind: 'unsupported', reason, message };
   }
 
+  // PDF magic: every PDF begins with the five bytes "%PDF-".
+  function isPdfSample(bytes) {
+    if (!bytes || bytes.length < 5) return false;
+    return (
+      bytes[0] === 0x25 && // %
+      bytes[1] === 0x50 && // P
+      bytes[2] === 0x44 && // D
+      bytes[3] === 0x46 && // F
+      bytes[4] === 0x2d // -
+    );
+  }
+
+  // The honest refusal for a PDF that parses but holds no extractable
+  // text (a scanned / image-only PDF). The file is NOT attached: the
+  // model would receive an empty document and the user would never
+  // know the content never arrived.
+  function pdfNoTextMessage(name) {
+    const label = name || 'that file';
+    return `"${label}" appears to be a scanned or image-only PDF — it has no readable text to extract, so it was not attached.`;
+  }
+
   // classifyFile({ name, type, size, sample })
   //   name:   file name (used for its extension)
   //   type:   MIME type as reported by the browser/OS (may be '')
@@ -121,6 +148,22 @@
       );
     }
 
+    // PDFs (v0.4.4): decided before the text rules — a PDF's header
+    // bytes can look text-ish to the sniff below, and its body is
+    // binary, so neither text path may claim it. The renderer cannot
+    // parse a PDF; classification only says "this is a PDF", and the
+    // main process extracts its text (see src/pdfText.js).
+    if (extensionOf(name) === 'pdf' || mime === 'application/pdf' || isPdfSample(sample)) {
+      if (size > MAX_PDF_BYTES) {
+        return unsupported(
+          'pdf-too-large',
+          `"${label}" is ${formatSize(size)} — PDFs are capped at about ${formatSize(MAX_PDF_BYTES)}. Split it or shrink it and try again.`
+        );
+      }
+      const via = extensionOf(name) === 'pdf' ? 'extension' : mime === 'application/pdf' ? 'mime' : 'magic';
+      return { kind: 'pdf', via };
+    }
+
     if (TEXT_EXTENSIONS.has(extensionOf(name))) {
       return { kind: 'document', via: 'extension' };
     }
@@ -134,7 +177,7 @@
     }
     return unsupported(
       'binary',
-      `"${label}" can't be read as an image or a text document, so it was not attached. Attach png/jpeg/webp images or text files (txt, md, json, csv, log, code) instead.`
+      `"${label}" can't be read as an image or a text document, so it was not attached. Attach png/jpeg/webp images, pdf files, or text files (txt, md, json, csv, log, code) instead.`
     );
   }
 
@@ -191,11 +234,14 @@
     IMAGE_MIME_TYPES,
     TEXT_EXTENSIONS,
     MAX_IMAGE_BYTES,
+    MAX_PDF_BYTES,
     DOC_CAP_BYTES,
     DOC_CAP_LABEL,
     SNIFF_BYTES,
     extensionOf,
     isTextSample,
+    isPdfSample,
+    pdfNoTextMessage,
     classifyFile,
     formatSize,
     sanitizeName,

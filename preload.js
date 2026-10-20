@@ -18,6 +18,10 @@ contextBridge.exposeInMainWorld('desktop', {
     try { return webUtils && file ? webUtils.getPathForFile(file) : ''; } catch (_) { return ''; }
   },
 
+  // PDF attachments (v0.4.4): the page cannot parse a PDF, so the raw
+  // bytes cross here and the main process extracts the text.
+  extractPdfText: (bytes) => ipcRenderer.invoke('attachments:extractPdfText', bytes),
+
   getHistory: () => ipcRenderer.invoke('history:get'),
   saveHistory: (messages) => ipcRenderer.invoke('history:save', messages),
   clearHistory: () => ipcRenderer.invoke('history:clear'),

@@ -21,6 +21,7 @@ const sessionGuard = require('./src/sessionGuard');
 const { createLessonsStore } = require('./src/lessons');
 const { createUpdater } = require('./src/updater');
 const attachmentsLib = require('./src/attachments');
+const { extractPdfText } = require('./src/pdfText');
 const { createLoopsStore } = require('./src/loops');
 const loopsCore = require('./src/loopsCore');
 const { createSopsStore, fetchVimeoOEmbed, fetchVimeoVideo, fetchVimeoTranscript, mockSop } = require('./src/sops');
@@ -235,6 +236,29 @@ app.whenReady().then(() => {
   ipcMain.handle('updater:check', () => (updater ? updater.checkNow() : { checked: false, reason: 'not-configured' }));
   ipcMain.handle('updater:install', () => (updater ? updater.requestInstall() : false));
   ipcMain.handle('app:version', () => app.getVersion());
+
+  // ---- PDF attachment IPC (v0.4.4) ----
+  // The renderer classifies a PDF (src/attachments.js) and sends the
+  // raw bytes here; the text is extracted in main (src/pdfText.js)
+  // and rides back as plain text, which the renderer stages as an
+  // ordinary document. Outcomes are reported, never thrown silently:
+  //   { ok: true,  text, numpages }       — attach it
+  //   { ok: false, reason: 'no-text' }    — scanned / image-only PDF
+  //   { ok: false, reason: 'too-large' }  — backstop for the cap the
+  //                                         classifier already enforces
+  //   { ok: false, reason: 'parse' }      — bytes are not a readable PDF
+  ipcMain.handle('attachments:extractPdfText', async (_e, bytes) => {
+    try {
+      const buffer = Buffer.from(bytes || []);
+      if (buffer.length === 0) return { ok: false, reason: 'parse', message: 'the file is empty' };
+      if (buffer.length > attachmentsLib.MAX_PDF_BYTES) return { ok: false, reason: 'too-large' };
+      const { text, numpages, hasText } = await extractPdfText(buffer);
+      if (!hasText) return { ok: false, reason: 'no-text', numpages };
+      return { ok: true, text, numpages };
+    } catch (err) {
+      return { ok: false, reason: 'parse', message: err && err.message ? err.message : String(err) };
+    }
+  });
 
   // ---- Teach lessons IPC ----
   // list/add/remove carry metadata only. The image data URL comes back

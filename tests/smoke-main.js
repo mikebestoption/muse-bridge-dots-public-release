@@ -221,6 +221,62 @@ const ATTACH_SCRIPT = `
   if (!overlay.classList.contains('hidden')) throw new Error('Escape did not cancel the overlay');
   checks.push('Escape cancels the drop overlay');
 
+  // v0.4.4: PDFs — main extracts the text and the PDF stages as a
+  // document chip; a text-less (scanned) PDF is refused honestly.
+  const NL = String.fromCharCode(10);
+  const BS = String.fromCharCode(92);
+  const buildSmokePdf = (text) => {
+    const esc = String(text).split(BS).join(BS + BS).split('(').join(BS + '(').split(')').join(BS + ')');
+    const stream = text ? 'BT /F1 12 Tf 72 720 Td (' + esc + ') Tj ET' : '';
+    const objs = [
+      '<< /Type /Catalog /Pages 2 0 R >>',
+      '<< /Type /Pages /Kids [4 0 R] /Count 1 >>',
+      '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>',
+      '<< /Length ' + stream.length + ' >>' + NL + 'stream' + NL + stream + NL + 'endstream'
+    ];
+    let out = '%PDF-1.4' + NL;
+    const offsets = [];
+    objs.forEach((body, i) => {
+      offsets.push(out.length);
+      out += (i + 1) + ' 0 obj' + NL + body + NL + 'endobj' + NL;
+    });
+    const xrefPos = out.length;
+    out += 'xref' + NL + '0 6' + NL + '0000000000 65535 f ' + NL;
+    offsets.forEach((off) => { out += ('0000000000' + off).slice(-10) + ' 00000 n ' + NL; });
+    out += 'trailer' + NL + '<< /Size 6 /Root 1 0 R >>' + NL + 'startxref' + NL + xrefPos + NL + '%%EOF' + NL;
+    return out;
+  };
+  const pdfCls = M.classifyFile({ name: 'smoke-notes.pdf', type: 'application/pdf', size: 10, sample: null });
+  if (pdfCls.kind !== 'pdf') throw new Error('classify .pdf in page failed: ' + JSON.stringify(pdfCls));
+  checks.push('in-page classification: pdf -> pdf');
+  const smokePdfBytes = new TextEncoder().encode(buildSmokePdf('smoke pdf page one'));
+  const ipcRes = await window.desktop.extractPdfText(smokePdfBytes);
+  if (!ipcRes || !ipcRes.ok || String(ipcRes.text || '').indexOf('smoke pdf page one') === -1) {
+    throw new Error('extractPdfText IPC round-trip failed: ' + JSON.stringify(ipcRes));
+  }
+  checks.push('extractPdfText IPC returns the PDF text');
+  const dtPdf = new DataTransfer();
+  dtPdf.items.add(new File([smokePdfBytes], 'smoke-notes.pdf', { type: 'application/pdf' }));
+  window.dispatchEvent(new DragEvent('drop', { dataTransfer: dtPdf, bubbles: true }));
+  await sleep(2500);
+  if (!(row.innerText || '').includes('smoke-notes.pdf')) throw new Error('PDF drop did not stage a chip: ' + (row.innerText || ''));
+  checks.push('PDF drop stages a document chip');
+  const scanBytes = new TextEncoder().encode(buildSmokePdf(''));
+  const scanRes = await window.desktop.extractPdfText(scanBytes);
+  if (!scanRes || scanRes.ok || scanRes.reason !== 'no-text') {
+    throw new Error('text-less PDF was not reported as no-text: ' + JSON.stringify(scanRes));
+  }
+  checks.push('text-less PDF reports no-text over IPC');
+  const dtScan = new DataTransfer();
+  dtScan.items.add(new File([scanBytes], 'scan.pdf', { type: 'application/pdf' }));
+  window.dispatchEvent(new DragEvent('drop', { dataTransfer: dtScan, bubbles: true }));
+  await sleep(2500);
+  if ((row.innerText || '').includes('scan.pdf')) throw new Error('text-less PDF was staged as a chip');
+  const scanStatus = document.getElementById('status-line').textContent || '';
+  if (!scanStatus.includes('scan.pdf')) throw new Error('text-less PDF produced no honest status note: ' + scanStatus);
+  checks.push('text-less PDF refused with a named status note');
+
   // Chips are removable.
   for (const btn of row.querySelectorAll('.attach-remove')) btn.click();
   await sleep(80);

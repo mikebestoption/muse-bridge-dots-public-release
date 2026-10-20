@@ -105,4 +105,46 @@ const stripped = ATT.stripDocumentBlocks(content);
 assert.ok(stripped.includes('[Attached document: notes.txt]'), 'strip keeps a one-line marker');
 assert.ok(!stripped.includes('hello'), 'strip drops the body (mock never echoes a document)');
 
+// ---- PDFs (v0.4.4) ----
+// '%PDF-1.7' header + some binary bytes, as a real file starts.
+const pdfBytes = new Uint8Array([
+  0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37, 0x0a, 0x25, 0xe2, 0xe3, 0xcf, 0xd3, 0x0a, 0x00
+]);
+assert.strictEqual(ATT.isPdfSample(pdfBytes), true, 'magic bytes recognized');
+assert.strictEqual(ATT.isPdfSample(textBytes('%PDF-')), true);
+assert.strictEqual(ATT.isPdfSample(textBytes('%PDF')), false, 'a short sample is not a PDF');
+assert.strictEqual(ATT.isPdfSample(textBytes('hello world')), false);
+assert.strictEqual(ATT.isPdfSample(null), false);
+// By extension, by MIME, and by magic — all three classify as pdf.
+const byExt = ATT.classifyFile({ name: 'report.pdf', type: '', size: 2048, sample: null });
+assert.strictEqual(byExt.kind, 'pdf');
+assert.strictEqual(byExt.via, 'extension');
+assert.strictEqual(ATT.classifyFile({ name: 'REPORT.PDF', type: '', size: 1 }).kind, 'pdf', 'extension match is case-insensitive');
+const byMime = ATT.classifyFile({ name: 'download', type: 'application/pdf', size: 10, sample: null });
+assert.strictEqual(byMime.kind, 'pdf');
+assert.strictEqual(byMime.via, 'mime');
+const byMagic = ATT.classifyFile({ name: 'noext', type: '', size: 100, sample: pdfBytes });
+assert.strictEqual(byMagic.kind, 'pdf');
+assert.strictEqual(byMagic.via, 'magic');
+// The PDF header is ASCII-heavy: the text sniff must never claim a
+// PDF as a plain document (the body that follows is binary).
+assert.notStrictEqual(byMagic.kind, 'document');
+// Oversize PDF: refused honestly, like oversize images.
+const bigPdf = ATT.classifyFile({ name: 'huge.pdf', type: 'application/pdf', size: ATT.MAX_PDF_BYTES + 1 });
+assert.strictEqual(bigPdf.kind, 'unsupported');
+assert.strictEqual(bigPdf.reason, 'pdf-too-large');
+assert.strictEqual(
+  ATT.classifyFile({ name: 'ok.pdf', type: '', size: ATT.MAX_PDF_BYTES }).kind,
+  'pdf',
+  'a PDF exactly at the cap is fine'
+);
+// The general unsupported message now names pdf among the supported.
+assert.ok(/pdf files/.test(zip.message), 'unsupported message lists pdf as supported');
+assert.ok(/pdf files/.test(exe.message), 'unsupported message lists pdf for exe too');
+// The no-text (scanned) refusal is honest and names the file.
+const noText = ATT.pdfNoTextMessage('scan.pdf');
+assert.ok(noText.includes('scan.pdf'), 'no-text message names the file');
+assert.ok(/scanned or image-only PDF/.test(noText), 'no-text message explains the scan case');
+assert.ok(/was not attached/.test(noText), 'no-text message is honest about not attaching');
+
 console.log('attachments.test.js: ALL PASS');

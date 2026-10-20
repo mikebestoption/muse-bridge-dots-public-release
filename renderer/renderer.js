@@ -290,6 +290,10 @@ function addTaskCard(action) {
 //     file's contents (capped at 100 KB); the text rides inside the
 //     outgoing message in a labeled document block, which is also how
 //     it is stored in history, so follow-up questions can use it.
+//     A PDF (v0.4.4) stages as exactly this shape too: main extracts
+//     its text (window.desktop.extractPdfText) and the extracted text
+//     is what rides in the block — a PDF with no readable text
+//     (scanned / image-only) is refused with an honest note instead.
 // Classification is the pure src/attachments.js module (loaded before
 // this script as window.MuseAttachments). A file that can be neither
 // is NEVER staged: the user gets an honest status note instead.
@@ -404,6 +408,28 @@ async function attachOneFile(file) {
       }
       const dataUrl = await readAsDataUrl(file);
       addPendingAttachment({ kind: 'image', name: file.name || 'pasted screenshot', size: file.size || 0, dataUrl });
+      return null;
+    }
+    if (cls.kind === 'pdf') {
+      // The page cannot parse a PDF: main extracts the text, and the
+      // PDF then stages exactly like a text document — same cap, same
+      // labeled block in the outgoing message.
+      const result = await window.desktop.extractPdfText(new Uint8Array(await file.arrayBuffer()));
+      if (!result || !result.ok) {
+        if (result && result.reason === 'no-text') return ATT.pdfNoTextMessage(label);
+        if (result && result.reason === 'too-large') {
+          return `"${label}" is ${ATT.formatSize(file.size || 0)} — PDFs are capped at about ${ATT.formatSize(ATT.MAX_PDF_BYTES)}, so it was not attached.`;
+        }
+        return `"${label}" could not be read as a PDF, so it was not attached.`;
+      }
+      const encoded = new TextEncoder().encode(result.text);
+      addPendingAttachment({
+        kind: 'document',
+        name: file.name || 'document.pdf',
+        size: file.size || 0,
+        text: new TextDecoder('utf-8').decode(encoded.slice(0, ATT.DOC_CAP_BYTES)),
+        truncated: encoded.length > ATT.DOC_CAP_BYTES
+      });
       return null;
     }
     const bytes = await readBlobBytes(file, ATT.DOC_CAP_BYTES);
