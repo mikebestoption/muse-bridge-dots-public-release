@@ -13,6 +13,12 @@ const path = require('path');
 
 const DEFAULT_MODEL = 'muse-spark-1.3';
 const ALLOWED_MODELS = ['muse-spark-1.3', 'muse-spark-1.1'];
+// Local transcription (v0.4.5): whisper model ids + language override.
+// Kept as literals here so the settings store stays dependency-free;
+// src/transcribeCore.js owns the model details.
+const ALLOWED_WHISPER_MODELS = ['base', 'small', 'large-v3-turbo'];
+const DEFAULT_WHISPER_MODEL = 'base';
+const ALLOWED_TRANSCRIBE_LANGUAGES = ['auto', 'en', 'es'];
 
 function createSettingsStore(userDataPath, safeStorage, defaultBridgePath) {
   const settingsFile = path.join(userDataPath, 'settings.json');
@@ -51,6 +57,10 @@ function createSettingsStore(userDataPath, safeStorage, defaultBridgePath) {
       handsMaxWaitMinutes: Number.isFinite(raw.handsMaxWaitMinutes) && raw.handsMaxWaitMinutes > 0
         ? raw.handsMaxWaitMinutes
         : 30,
+      whisperModel: ALLOWED_WHISPER_MODELS.includes(raw.whisperModel) ? raw.whisperModel : DEFAULT_WHISPER_MODEL,
+      transcribeLanguage: ALLOWED_TRANSCRIBE_LANGUAGES.includes(raw.transcribeLanguage)
+        ? raw.transcribeLanguage
+        : 'auto',
       hasKey: Boolean(raw.encryptedKey) || Boolean(inMemoryKey),
       keyPersisted: Boolean(raw.encryptedKey),
       hasVimeoToken: Boolean(raw.encryptedVimeoToken) || Boolean(inMemoryVimeoToken),
@@ -104,8 +114,10 @@ function createSettingsStore(userDataPath, safeStorage, defaultBridgePath) {
   }
 
   // apiKey: string to set, '' to leave unchanged is handled by caller passing null.
-  function save({ model, bridgePath, apiKey, vimeoToken, githubToken, auditNightDefault, vaultAutoLockMinutes, handsIdleThresholdSeconds, handsMaxWaitMinutes }) {
+  function save({ model, bridgePath, apiKey, vimeoToken, githubToken, auditNightDefault, vaultAutoLockMinutes, handsIdleThresholdSeconds, handsMaxWaitMinutes, whisperModel, transcribeLanguage }) {
     const raw = readRaw();
+    if (ALLOWED_WHISPER_MODELS.includes(whisperModel)) raw.whisperModel = whisperModel;
+    if (ALLOWED_TRANSCRIBE_LANGUAGES.includes(transcribeLanguage)) raw.transcribeLanguage = transcribeLanguage;
     if (typeof auditNightDefault === 'boolean') raw.auditNightDefault = auditNightDefault;
     if (Number.isFinite(vaultAutoLockMinutes) && vaultAutoLockMinutes >= 0) {
       raw.vaultAutoLockMinutes = Math.round(vaultAutoLockMinutes);
@@ -178,4 +190,4 @@ function createSettingsStore(userDataPath, safeStorage, defaultBridgePath) {
   return { getPublicSettings, getModel, getBridgePath, getApiKey, getVimeoToken, getGithubToken, save, clearKey, clearVimeoToken, clearGithubToken };
 }
 
-module.exports = { createSettingsStore, ALLOWED_MODELS, DEFAULT_MODEL };
+module.exports = { createSettingsStore, ALLOWED_MODELS, DEFAULT_MODEL, ALLOWED_WHISPER_MODELS, DEFAULT_WHISPER_MODEL, ALLOWED_TRANSCRIBE_LANGUAGES };

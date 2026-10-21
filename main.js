@@ -28,6 +28,11 @@ const { createSopsStore, fetchVimeoOEmbed, fetchVimeoVideo, fetchVimeoTranscript
 const sopCore = require('./src/sopCore');
 const { createVideoStore, MAX_VIDEO_BYTES } = require('./src/videoFiles');
 const { createRequestsChannel } = require('./src/githubRequests');
+const transcribeCore = require('./src/transcribeCore');
+const { createTranscriber, TranscribeError } = require('./src/transcriber');
+const { createTranscriptsStore } = require('./src/transcripts');
+const pythonSetup = require('./src/pythonSetup');
+const { execFile } = require('child_process');
 
 let settings = null;
 let mainWindow = null;
@@ -38,6 +43,30 @@ let loops = null;
 let sops = null;
 let videos = null;
 let requestsChannel = null;
+let transcriber = null;
+let transcriptsStore = null;
+
+// Small process runner for detection probes (Python / winget): resolves
+// { code, stdout, stderr } for any exit code, rejects only when the
+// process cannot start at all.
+function runProcess(cmd, args) {
+  return new Promise((resolve, reject) => {
+    execFile(cmd, args, { timeout: 15000, windowsHide: true, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err && typeof err.code !== 'number') {
+        // Spawn-level failure (e.g. ENOENT): the tool is not there.
+        reject(err);
+        return;
+      }
+      resolve({ code: err ? err.code : 0, stdout: stdout || '', stderr: stderr || '' });
+    });
+  });
+}
+
+let wingetCache = null;
+function wingetAvailable() {
+  if (!wingetCache) wingetCache = pythonSetup.detectWinget(runProcess).catch(() => false);
+  return wingetCache;
+}
 
 // Staged videos are served to the renderer's hidden <video> element for
 // frame sampling through a private scheme (streaming, range-capable),
@@ -149,6 +178,16 @@ app.whenReady().then(() => {
   // ---- Teach lessons (local only; images live in userData) ----
   lessons = createLessonsStore(app.getPath('userData'));
 
+  // ---- Local transcription (v0.4.5; whisper.cpp + ffmpeg, on-device) ----
+  transcriptsStore = createTranscriptsStore(app.getPath('userData'));
+  transcriber = createTranscriber({
+    userDataPath: app.getPath('userData'),
+    resourcesBinDir: app.isPackaged
+      ? path.join(process.resourcesPath, 'bin')
+      : path.join(__dirname, 'resources', 'bin'),
+    store: transcriptsStore
+  });
+
   // ---- Loops + SOPs + staged videos (all local, userData only) ----
   loops = createLoopsStore(app.getPath('userData'));
   sops = createSopsStore(app.getPath('userData'));
@@ -258,6 +297,140 @@ app.whenReady().then(() => {
     } catch (err) {
       return { ok: false, reason: 'parse', message: err && err.message ? err.message : String(err) };
     }
+  });
+
+  // ---- Local transcription IPC (v0.4.5) ----
+  // Everything here is on-device: readiness probes, the one-time
+  // model download (progress events), segmented transcription jobs
+  // (progress events), and the Transcripts library. Outcomes are
+  // reported in plain language with a fix id — raw tool output rides
+  // along as `details` for the UI's details toggle only.
+  const transcribeError = (err) => {
+    if (err instanceof TranscribeError) {
+      return { ok: false, error: err.info.message, info: err.info, details: err.details || '' };
+    }
+    return { ok: false, error: err && err.message ? err.message : String(err), info: null, details: '' };
+  };
+  const sendTranscribeProgress = (payload) => {
+    if (mainWindow) mainWindow.webContents.send('transcribe:progress', payload);
+  };
+  ipcMain.handle('transcribe:readiness', async () => {
+    try {
+      return { ok: true, ...(await transcriber.readiness(settings.getPublicSettings().whisperModel)) };
+    } catch (err) {
+      return transcribeError(err);
+    }
+  });
+  ipcMain.handle('transcribe:downloadModel', async (_e, modelId) => {
+    try {
+      const id = transcribeCore.getModel(modelId) ? modelId : settings.getPublicSettings().whisperModel;
+      const result = await transcriber.downloadModel(id, (p) => {
+        if (mainWindow) mainWindow.webContents.send('transcribe:modelProgress', { modelId: id, ...p });
+      });
+      return { ok: true, ...result };
+    } catch (err) {
+      return transcribeError(err);
+    }
+  });
+  ipcMain.handle('transcribe:repairBinaries', async () => {
+    try {
+      const seeded = await transcriber.repairBinaries();
+      const readiness = await transcriber.readiness(settings.getPublicSettings().whisperModel);
+      return { ok: true, seeded, readiness };
+    } catch (err) {
+      return transcribeError(err);
+    }
+  });
+  ipcMain.handle('transcribe:file', async (_e, payload) => {
+    try {
+      const pub = settings.getPublicSettings();
+      const record = await transcriber.transcribe({
+        inputPath: String((payload && payload.path) || ''),
+        title: payload && payload.title,
+        sourceName: payload && payload.name,
+        sourceKind: (payload && payload.sourceKind) || 'chat-attachment',
+        sourceRef: String((payload && payload.path) || ''),
+        modelId: (payload && payload.modelId) || pub.whisperModel,
+        language: pub.transcribeLanguage,
+        onProgress: sendTranscribeProgress
+      });
+      return { ok: true, record, cancelled: Boolean(record.cancelled) };
+    } catch (err) {
+      return transcribeError(err);
+    }
+  });
+  ipcMain.handle('transcribe:staged', async (_e, payload) => {
+    try {
+      const stagedId = String((payload && payload.stagedId) || '');
+      const file = videos ? videos.getPath(stagedId) : null;
+      if (!file) return { ok: false, error: 'That staged video file is no longer on this PC.', info: null, details: '' };
+      const pub = settings.getPublicSettings();
+      const record = await transcriber.transcribe({
+        inputPath: file,
+        title: payload && payload.title,
+        sourceName: payload && payload.name,
+        sourceKind: 'teach-video',
+        sourceRef: stagedId,
+        modelId: (payload && payload.modelId) || pub.whisperModel,
+        language: pub.transcribeLanguage,
+        onProgress: sendTranscribeProgress
+      });
+      return { ok: true, record, cancelled: Boolean(record.cancelled) };
+    } catch (err) {
+      return transcribeError(err);
+    }
+  });
+  // Retry / resume: re-runs ONLY the segments that never finished.
+  ipcMain.handle('transcribe:resume', async (_e, recordId) => {
+    try {
+      const existing = transcriptsStore ? transcriptsStore.get(String(recordId || '')) : null;
+      if (!existing) return { ok: false, error: 'That transcript record no longer exists.', info: null, details: '' };
+      let inputPath = '';
+      if (existing.sourceKind === 'teach-video') {
+        inputPath = videos && existing.sourceRef ? videos.getPath(existing.sourceRef) : null;
+        if (!inputPath) return { ok: false, error: 'The staged video for that transcript is no longer on this PC, so the missing parts cannot be re-run.', info: null, details: '' };
+      } else {
+        inputPath = existing.sourceRef || '';
+        if (!inputPath || !fs.existsSync(inputPath)) {
+          return { ok: false, error: 'The original file for that transcript cannot be found at its old location. Attach the file again to finish the missing parts.', info: null, details: '' };
+        }
+      }
+      const pub = settings.getPublicSettings();
+      const record = await transcriber.transcribe({
+        inputPath,
+        recordId: existing.id,
+        onlySegments: transcriptsStore.pendingSegments(existing.id).map((s) => s.index),
+        modelId: existing.model || pub.whisperModel,
+        language: existing.language || pub.transcribeLanguage,
+        onProgress: sendTranscribeProgress
+      });
+      return { ok: true, record, cancelled: Boolean(record.cancelled) };
+    } catch (err) {
+      return transcribeError(err);
+    }
+  });
+  ipcMain.handle('transcribe:cancel', (_e, recordId) => (transcriber ? transcriber.cancel(String(recordId || '')) : false));
+
+  // ---- Transcripts library IPC ----
+  ipcMain.handle('transcripts:list', () => (transcriptsStore ? transcriptsStore.list() : []));
+  ipcMain.handle('transcripts:get', (_e, id) => (transcriptsStore ? transcriptsStore.get(id) : null));
+  ipcMain.handle('transcripts:remove', (_e, id) => (transcriptsStore ? transcriptsStore.remove(id) : false));
+  ipcMain.handle('transcripts:export', async (_e, id) => {
+    const record = transcriptsStore ? transcriptsStore.get(id) : null;
+    if (!record) return { ok: false, error: 'That transcript no longer exists.' };
+    const saved = await bridge.writeOutboxFile(
+      settings.getBridgePath(),
+      `${loopsCore.slugify(record.title || 'transcript')}-transcript.txt`,
+      record.text || ''
+    );
+    return { ok: true, ...saved };
+  });
+
+  // ---- Python setup IPC (v0.4.5) ----
+  ipcMain.handle('python:status', async () => {
+    const python = await pythonSetup.detectPython(runProcess, process.platform).catch(() => ({ found: false, version: null, launcher: null }));
+    const winget = process.platform === 'win32' ? await wingetAvailable() : false;
+    return { platform: process.platform, python, wingetAvailable: winget };
   });
 
   // ---- Teach lessons IPC ----
@@ -471,10 +644,20 @@ app.whenReady().then(() => {
         .slice(0, sopCore.MAX_FRAMES);
       let transcript = record.transcriptText || '';
       let transcriptSource = record.transcriptSource || 'none';
+      // v0.4.5: a transcript override may arrive from the LOCAL
+      // transcription engine (source 'whisper-local') instead of a
+      // user file. noSpeech means the audio was transcribed and held
+      // no detectable speech — labeled as such, never as "frames only".
+      const noSpeech = Boolean(payload && payload.noSpeech) && !(typeof transcriptText === 'string' && transcriptText.trim());
       if (typeof transcriptText === 'string' && transcriptText.trim()) {
         transcript = transcriptText;
-        transcriptSource = 'user-file';
+        transcriptSource = typeof payload.transcriptSource === 'string' && payload.transcriptSource
+          ? payload.transcriptSource
+          : 'user-file';
         sops.update(recordId, { transcriptText: transcript, transcriptSource });
+      } else if (noSpeech) {
+        transcriptSource = 'whisper-local';
+        sops.update(recordId, { transcriptText: '', transcriptSource });
       }
       sops.update(recordId, { frameCount: frameList.length });
       const apiKey = settings.getApiKey();
@@ -487,7 +670,8 @@ app.whenReady().then(() => {
           title: record.title,
           transcript,
           frameCount: withFrames ? frameList.length : 0,
-          transcriptSource
+          transcriptSource,
+          noSpeechDetected: noSpeech
         });
         const message = { role: 'user', content: userText };
         if (withFrames && frameList.length) message.imageDataUrls = frameList;
@@ -620,12 +804,27 @@ app.whenReady().then(() => {
   // The renderer asks main to resolve a proposed action's paths against the
   // real OS folders BEFORE rendering the approval card, so the path Michael
   // approves is the path that runs.
-  ipcMain.handle('task:resolve', (_e, action) => resolveAction(action));
+  // install_python actions are enriched with their exact install plan
+  // (winget vs python.org download, decided from THIS machine) before
+  // the approval card renders — the card shows the very commands the
+  // engine will run, and execution uses the approved plan verbatim.
+  async function resolveWithPlan(action) {
+    const resolved = resolveAction(action);
+    if (resolved && resolved.type === 'install_python' && !resolved.plan) {
+      resolved.plan = pythonSetup.buildInstallPlan({
+        platform: process.platform,
+        wingetAvailable: process.platform === 'win32' ? await wingetAvailable() : false,
+        downloadsDir: specialFolders().downloads
+      });
+    }
+    return resolved;
+  }
+  ipcMain.handle('task:resolve', async (_e, action) => resolveWithPlan(action));
 
   ipcMain.handle('task:execute', async (_e, proposedAction, opts) => {
     // Resolve again at execution (defense in depth): no caller can run a
     // model-guessed profile path, whatever route the action arrived by.
-    const action = resolveAction(proposedAction);
+    const action = await resolveWithPlan(proposedAction);
     const execId = opts && typeof opts.execId === 'string' ? opts.execId : null;
     const mode = opts && opts.mode === 'queue' ? 'queue' : 'interactive';
 
@@ -676,7 +875,8 @@ app.whenReady().then(() => {
       shell,
       homePath: app.getPath('home'),
       specialFolders: specialFolders(),
-      vaultFill: vaultFillProvider()
+      vaultFill: vaultFillProvider(),
+      wingetAvailable: process.platform === 'win32' ? await wingetAvailable() : false
     });
     return { ...result, summary: describeAction(action) };
   });

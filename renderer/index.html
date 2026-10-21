@@ -146,6 +146,13 @@
           </div>
           <h3 class="sop-heading">📋 SOPs from video</h3>
           <div id="sops-list"></div>
+          <h3 class="sop-heading">🎙 Transcripts — speech to text, on this PC</h3>
+          <div id="transcribe-box" class="teach-video-box">
+            <div class="side-note">Transcription runs entirely on this PC (whisper.cpp) — no AI tokens, nothing uploaded, no Python needed. Recordings are transcribed in 5-minute parts that save as they land, so a long meeting is never silently cut short: the finished transcript states exactly how much it covers, and any missing parts can be retried on their own.</div>
+            <div id="transcribe-readiness"></div>
+            <div id="transcribe-status" class="side-note"></div>
+          </div>
+          <div id="transcripts-list"></div>
           <h3 class="sop-heading">📸 Screenshot lessons</h3>
           <div id="lessons-list"></div>
         </div>
@@ -241,8 +248,8 @@
         <div id="status-line"></div>
         <div id="attachments-row" class="attachments-row hidden"></div>
         <div id="composer">
-          <button id="attach-image" title="Attach files — screenshots (png, jpeg, webp) or text documents. You can also drag &amp; drop files anywhere in this window, or paste them.">📎</button>
-          <input id="attach-file" type="file" multiple accept="image/png,image/jpeg,image/webp,.pdf,application/pdf,.txt,.md,.json,.csv,.log,.xml,.html,.js,.ts,.py,text/plain" class="hidden" />
+          <button id="attach-image" title="Attach files — screenshots (png, jpeg, webp), text documents, PDFs, or audio/video to transcribe locally. You can also drag &amp; drop files anywhere in this window, or paste them.">📎</button>
+          <input id="attach-file" type="file" multiple accept="image/png,image/jpeg,image/webp,.pdf,application/pdf,.txt,.md,.json,.csv,.log,.xml,.html,.js,.ts,.py,text/plain,.mp3,.wav,.m4a,.ogg,.opus,.flac,.aac,audio/*,.mp4,.webm,.mov,.m4v,.mkv,video/*" class="hidden" />
           <textarea id="input" rows="2" placeholder="Message Muse Spark…  (try: list my Downloads folder)"></textarea>
           <button id="send">Send</button>
         </div>
@@ -301,6 +308,32 @@
         <option value="muse-spark-1.3">muse-spark-1.3</option>
         <option value="muse-spark-1.1">muse-spark-1.1</option>
       </select>
+
+      <label class="field-label" for="whisper-model">Transcription — speech model (local, no AI tokens)</label>
+      <select id="whisper-model">
+        <option value="base">Fast (base, ~150 MB) — short clips and voice notes</option>
+        <option value="small">Balanced (small, ~490 MB)</option>
+        <option value="large-v3-turbo">Meeting quality (large-v3-turbo, ~1.6 GB) — recommended for meetings</option>
+      </select>
+      <div class="field-note">Speech-to-text runs on this PC with whisper.cpp — offline, private, and free of AI charges. The model downloads once into the app's data folder and is verified by checksum before use. Switching models takes effect for the next transcription; a model you have not downloaded yet is fetched (with its size confirmed) when a transcription needs it or from the Transcripts panel.</div>
+
+      <label class="field-label" for="transcribe-language">Transcription — language</label>
+      <select id="transcribe-language">
+        <option value="auto">Auto-detect (English / Spanish / …)</option>
+        <option value="en">English</option>
+        <option value="es">Spanish</option>
+      </select>
+      <div class="field-note">Auto-detect handles mixed English/Spanish recordings. Pin a language when a recording is entirely one language and detection wavers.</div>
+
+      <label class="field-label">🐍 Python</label>
+      <div class="row">
+        <span id="python-status" class="field-note" style="margin:0">Checking for Python…</span>
+      </div>
+      <div class="row">
+        <button id="python-install" class="mini-btn large">🐍 Install Python</button>
+        <button id="python-recheck" class="mini-btn large">Re-check</button>
+      </div>
+      <div class="field-note">Python is a general runtime some tools and scripts expect. Installing it uses the standard approval card — you see the exact commands (winget, or the official python.org installer, per-user) before anything runs. If Windows shows a UAC/admin prompt during the install, that click is yours. Transcription does NOT need Python — it is fully native.</div>
 
       <label class="field-label" for="audit-night-default">Dot audit — Night Queue default</label>
       <div class="row">

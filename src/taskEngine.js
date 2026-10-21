@@ -33,11 +33,12 @@ const fs = require('fs');
 const path = require('path');
 const { exec, execFile, spawn } = require('child_process');
 const { resolveActionPaths } = require('./pathResolver');
+const pythonSetup = require('./pythonSetup');
 
 const ACTION_TYPES = [
   'open_url', 'open_app', 'list_folder', 'create_file', 'append_to_file',
   'run_command', 'copy_from_app', 'paste_to_app',
-  'fill_login', 'fill_totp', 'wait_for_user'
+  'fill_login', 'fill_totp', 'wait_for_user', 'install_python'
 ];
 const FORBIDDEN_NAME_CHARS = /[;&|`$<>\n\r"]/;
 
@@ -72,9 +73,9 @@ async function ensureDir(dir, fsImpl) {
   }
 }
 
-function runShellCommand(command, cwd) {
+function runShellCommand(command, cwd, timeoutMs) {
   return new Promise((resolve) => {
-    exec(command, { timeout: 30000, maxBuffer: 1024 * 1024, windowsHide: true, cwd: cwd || undefined }, (err, stdout, stderr) => {
+    exec(command, { timeout: timeoutMs || 30000, maxBuffer: 4 * 1024 * 1024, windowsHide: true, cwd: cwd || undefined }, (err, stdout, stderr) => {
       if (err) {
         resolve({ ok: false, output: `Command failed (${err.message}).\n${stderr || ''}`.trim() });
       } else {
@@ -82,6 +83,38 @@ function runShellCommand(command, cwd) {
       }
     });
   });
+}
+
+// The Python install plan (src/pythonSetup.js): built by main at
+// resolve time (winget route vs python.org download), shown verbatim
+// on the approval card, executed here step by step with a generous
+// timeout — a Python install is not a 30-second command. Steps come
+// from the approved plan on the action itself; without one, no plan
+// is guessed at execution time.
+const INSTALL_STEP_TIMEOUT_MS = 15 * 60 * 1000;
+async function executeInstallPython(action, ctx) {
+  if (process.platform !== 'win32') {
+    return { ok: false, output: 'One-click Python install is Windows-only in this version. Install Python from python.org or your package manager — the app will detect it in Settings.' };
+  }
+  const plan = action.plan && Array.isArray(action.plan.steps) && action.plan.steps.length
+    ? action.plan
+    : pythonSetup.buildInstallPlan({
+        platform: process.platform,
+        wingetAvailable: Boolean(ctx.wingetAvailable),
+        downloadsDir: ctx.specialFolders ? ctx.specialFolders.downloads : ctx.homePath
+      });
+  if (!plan.supported) return { ok: false, output: plan.note || 'Python install is not available here.' };
+  const outputs = [];
+  for (const step of plan.steps) {
+    outputs.push(`▸ ${step.label}`);
+    const res = await runShellCommand(step.command, undefined, INSTALL_STEP_TIMEOUT_MS);
+    if (res.output) outputs.push(res.output);
+    if (!res.ok) {
+      return { ok: false, output: `${outputs.join('\n')}\nPython install stopped at this step. If Windows showed a UAC/admin prompt, that click is yours — approve it and run the install again.` };
+    }
+  }
+  outputs.push('Python install steps finished. Open Settings → Python and choose "Re-check" to confirm the version the app can now see.');
+  return { ok: true, output: outputs.join('\n') };
 }
 
 // ---- Windows clipboard bridge (PowerShell + SendKeys) ----
@@ -345,6 +378,10 @@ async function executeAction(action, ctx) {
         return { ok: false, waitForUser: true, output: `Waiting on you: ${reason}` };
       }
 
+      case 'install_python': {
+        return executeInstallPython(action, ctx);
+      }
+
       default:
         return { ok: false, output: 'Unhandled action type.' };
     }
@@ -368,6 +405,13 @@ function describeAction(action) {
     case 'fill_login': return `Fill login for vault entry "${action.entryLabel}"${action.targetWindowTitle ? ` in window "${action.targetWindowTitle}"` : ''} (password typed from the vault — never shown)`;
     case 'fill_totp': return `Fill authenticator code for vault entry "${action.entryLabel}"${action.targetWindowTitle ? ` in window "${action.targetWindowTitle}"` : ''} (code generated at run time — never shown)`;
     case 'wait_for_user': return `Wait for you: ${action.reason || 'user action needed'}`;
+    case 'install_python': {
+      const plan = action.plan;
+      if (plan && Array.isArray(plan.steps) && plan.steps.length) {
+        return `${pythonSetup.describeInstallPlan(plan)}${plan.note ? `\n${plan.note}` : ''}`;
+      }
+      return 'Install Python 3.12 (the exact steps will be listed before anything runs)';
+    }
     default: return `${action.type}`;
   }
 }

@@ -1,4 +1,4 @@
-# Muse Bridge — v0.4.3 (Best Option mark icon)
+# Muse Bridge — v0.4.5 (local transcription + Python setup)
 
 **Muse Bridge** is a free, open-source desktop app for Windows,
 powered by Muse Spark (Meta Model API). It is published under the
@@ -12,6 +12,77 @@ if you would like to propose an improvement. It has three jobs:
 3. **Bridge ChatGPT (Dot) and Muse** — the two-engine cross-check loop:
    ChatGPT results come in, Muse Spark reviews them; Muse Spark results go
    out as "verify this" packets; Dot's audit feedback comes back and gets logged.
+
+## Changes in 0.4.5
+
+- **🎙 Local transcription — speech-to-text that runs entirely on
+  your PC.** Attach an audio file (mp3/wav/m4a/ogg/flac/webm) or a
+  video (mp4/webm/mov/mkv) in chat and tap **🎙**: the app extracts
+  the audio and transcribes it with a bundled whisper.cpp engine.
+  **Free, offline, private** — no AI tokens are used, nothing is
+  uploaded, and it works the same in mock mode. The transcript
+  becomes a document you can send to Muse Spark, and every
+  transcript is also saved to the new **Transcripts** library in the
+  📸 Lessons & SOPs panel (view, copy, export .txt to the Bridge
+  Outbox, delete).
+- **Meetings are transcribed COMPLETELY — never silently partial.**
+  Long recordings are transcribed in 5-minute parts, each part saved
+  as it lands, with progress showing "part x of y — covered 47:10 of
+  62:10". The finished transcript states its coverage
+  ("Transcribed 62:10 of 62:10"). If a part fails, the transcript is
+  labeled **PARTIAL**, the exact missing ranges are named
+  ("missing 20:00–25:00"), and **Retry missing parts** re-runs only
+  the gaps. Closing the app mid-meeting leaves a resumable partial,
+  not a lost recording. Two speech models, both multilingual
+  (English + Spanish): **Fast (base, ~150 MB)** for clips and voice
+  notes, and **Meeting quality (large-v3-turbo, ~1.6 GB)** —
+  recommended for meetings and long recordings. A model downloads
+  once, is verified against its known SHA-256 before it is trusted
+  (a failed check deletes it — a partial download is never treated
+  as complete), and afterwards transcription needs nothing from the
+  internet at all.
+- **Teach from video now hears the narration.** Generating an SOP
+  from a recording first transcribes its audio locally, so the SOP
+  is built from the frames AND the spoken words. The "from video
+  frames only" label now appears only when a recording genuinely
+  has no audio; a silent recording is labeled "no speech detected",
+  and a transcription that cannot run stops the SOP instead of
+  stamping a wrong label on it. Recordings over ~15 minutes use the
+  Meeting quality model when it is downloaded.
+- **Transcription is self-sufficient — no more "it only errors".**
+  The engine ships with its Microsoft runtime DLLs bundled privately
+  next to the executables (no system install, no admin, no
+  MSVCP140.dll-was-not-found failures). A **Transcription setup**
+  check in the Transcripts panel proves the setup with real runs —
+  engine files present, ffmpeg starts, the whisper engine starts,
+  model present and hash-valid, working space writable, disk space
+  sane — each with a plain-language result and a one-click Fix
+  (re-download the model, repair the engine files from the app's own
+  bundled copies, or, as a last resort, install Microsoft's VC++
+  runtime through a standard approval card). Known failure classes
+  (missing DLL, the 0xc000007b architecture error, damaged model,
+  no audio track, unreadable file) are translated into plain
+  guidance; the raw detail stays under a "details" toggle.
+  Transcription needs NO Python, no pip, and no extra installers —
+  after the one-time model download it needs nothing else at all.
+- **🐍 One-click Python setup (Settings → Python).** The card shows
+  whether Python is installed (and its version), and **Install
+  Python** builds the exact install — winget when available, else
+  the official python.org per-user installer — as a STANDARD
+  APPROVAL CARD: nothing installs until you approve it, and the
+  card shows the exact commands that will run. If Windows raises a
+  UAC/admin prompt, that click is yours; the card says so up front.
+  (Windows-only in this version; detection works everywhere.)
+- **Installer size note:** the setup grows from ~85 MB (0.4.4) to
+  ~111 MB — the price of bundling the transcription engine (ffmpeg)
+  so speech-to-text works offline with zero setup.
+
+## Changes in 0.4.4
+
+- **📄 PDF attachments.** Dropping or picking a PDF extracts its text
+  in the app (pdfjs) and stages it as a labeled document block, the
+  same way text documents already worked — no upload anywhere. A
+  scanned PDF with no text layer is refused honestly, by name.
 
 ## Changes in 0.4.3
 

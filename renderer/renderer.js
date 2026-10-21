@@ -170,6 +170,21 @@ function describeForCard(action) {
   if (action.type === 'wait_for_user') {
     return { label, detail: `This step needs you in person: ${action.reason || 'user action needed'}` };
   }
+  if (action.type === 'install_python') {
+    // The plan was built by main for THIS machine (winget route vs the
+    // official python.org installer) and is shown verbatim — the exact
+    // commands below are what will run, nothing else.
+    const plan = action.plan;
+    if (plan && Array.isArray(plan.steps) && plan.steps.length) {
+      const lines = [
+        `Install Python (${plan.route === 'winget' ? 'via winget' : 'via the official python.org installer'}):`,
+        ...plan.steps.map((s) => `• ${s.label}\n  ${s.command}`),
+        plan.note || ''
+      ].filter(Boolean);
+      return { label: 'Install Python', detail: lines.join('\n') };
+    }
+    return { label: 'Install Python', detail: 'Install Python 3.12 on this PC. The exact steps are listed on this card before anything runs.' };
+  }
   const detail = { ...action };
   delete detail.label;
   return { label, detail: JSON.stringify(detail, null, 2) };
@@ -316,6 +331,7 @@ function renderAttachmentChips() {
     const chip = document.createElement('div');
     chip.className = 'attach-item';
     chip.dataset.attId = String(att.id);
+    const isMedia = att.kind === 'audio' || att.kind === 'video';
     if (att.kind === 'image') {
       const img = document.createElement('img');
       img.className = 'attach-thumb';
@@ -325,7 +341,7 @@ function renderAttachmentChips() {
     } else {
       const icon = document.createElement('span');
       icon.className = 'attach-doc-icon';
-      icon.textContent = '📄';
+      icon.textContent = att.kind === 'audio' ? '🎙' : att.kind === 'video' ? '🎬' : '📄';
       chip.appendChild(icon);
     }
     const meta = document.createElement('span');
@@ -336,11 +352,42 @@ function renderAttachmentChips() {
     meta.appendChild(nameEl);
     const sub = document.createElement('span');
     sub.className = 'attach-sub';
-    sub.textContent = att.kind === 'image'
-      ? (att.size ? `image · ${ATT.formatSize(att.size)}` : 'image')
-      : `document · ${ATT.formatSize(att.size)}${att.truncated ? ' · first 100 KB sent' : ''}`;
+    if (att.kind === 'image') {
+      sub.textContent = att.size ? `image · ${ATT.formatSize(att.size)}` : 'image';
+    } else if (isMedia) {
+      sub.textContent = att.tNote || `${att.kind} · ${ATT.formatSize(att.size)} — transcribe it to send its words`;
+    } else {
+      sub.textContent = `document · ${ATT.formatSize(att.size)}${att.truncated ? ' · first 100 KB sent' : ''}`;
+    }
     meta.appendChild(sub);
     chip.appendChild(meta);
+    if (isMedia) {
+      const actionBtn = document.createElement('button');
+      actionBtn.className = 'attach-remove';
+      if (att.tState === 'working') {
+        actionBtn.textContent = '⏹';
+        actionBtn.title = 'Cancel transcription (finished parts stay saved in the Transcripts library)';
+        actionBtn.addEventListener('click', async () => {
+          if (att.recordId) await window.desktop.transcribeCancel(att.recordId);
+          att.tState = 'idle';
+          att.tNote = `${att.kind} · ${ATT.formatSize(att.size)} — transcription cancelled; finished parts are in the Transcripts panel`;
+          renderAttachmentChips();
+        });
+      } else if (att.tState === 'needs-model') {
+        actionBtn.textContent = '⬇';
+        actionBtn.title = 'Download the speech model (one-time, size shown first, verified before use)';
+        actionBtn.addEventListener('click', () => downloadModelFlow(settings && settings.whisperModel, att));
+      } else if (att.tState === 'downloading') {
+        actionBtn.textContent = '…';
+        actionBtn.disabled = true;
+        actionBtn.title = 'Downloading the speech model…';
+      } else {
+        actionBtn.textContent = '🎙';
+        actionBtn.title = `Transcribe ${att.name || 'media'} on this PC (local — no AI tokens)`;
+        actionBtn.addEventListener('click', () => transcribeAttachment(att));
+      }
+      chip.appendChild(actionBtn);
+    }
     const remove = document.createElement('button');
     remove.className = 'attach-remove';
     remove.textContent = '×';
@@ -410,6 +457,19 @@ async function attachOneFile(file) {
       addPendingAttachment({ kind: 'image', name: file.name || 'pasted screenshot', size: file.size || 0, dataUrl });
       return null;
     }
+    if (cls.kind === 'audio' || cls.kind === 'video') {
+      // Media stages BY PATH (never read into the page): main
+      // transcribes it locally when the user taps 🎙 on the chip.
+      const filePath = window.desktop.getFilePath ? window.desktop.getFilePath(file) : '';
+      if (!filePath) {
+        return `"${label}" was not attached — transcription works on the file on disk, and this copy has no path on this PC. Attach it from its folder instead.`;
+      }
+      addPendingAttachment({
+        kind: cls.kind, name: file.name || label, size: file.size || 0,
+        path: filePath, tState: 'idle', tNote: '', recordId: null
+      });
+      return null;
+    }
     if (cls.kind === 'pdf') {
       // The page cannot parse a PDF: main extracts the text, and the
       // PDF then stages exactly like a text document — same cap, same
@@ -467,6 +527,127 @@ async function attachFiles(files) {
   if (parts.length) setStatus(parts.join(' '));
 }
 
+// ---------- Local transcription from chat (v0.4.5) ----------
+// Media chips transcribe ON THIS PC (whisper.cpp, no AI tokens). The
+// transcript replaces the chip as a document (so it rides in the
+// message like any attached document) and is ALSO saved to the
+// Transcripts library automatically. A job that stops early keeps
+// its finished parts in the library — the chip says so.
+
+let chipTranscribingId = null;
+
+function fmtClock(sec) {
+  // Matches the core formatter: minutes unbounded ("62:10").
+  const total = Math.max(0, Math.round(Number.isFinite(sec) ? sec : 0));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+}
+
+async function downloadModelFlow(modelId, att) {
+  const id = modelId || 'base';
+  if (att) {
+    att.tState = 'downloading';
+    att.tNote = 'Downloading the speech model… 0% (one-time — verified before use)';
+    renderAttachmentChips();
+  }
+  setTranscribeStatus(`Downloading the ${id} speech model…`);
+  const res = await window.desktop.transcribeDownloadModel(id);
+  if (res && res.ok) {
+    if (att) {
+      att.tState = 'idle';
+      att.tNote = `${att.kind} · ${ATT.formatSize(att.size)} — model ready, tap 🎙 to transcribe`;
+      renderAttachmentChips();
+    }
+    setTranscribeStatus('Speech model downloaded and verified. Transcription now works fully offline.');
+    renderTranscribeReadiness();
+  } else {
+    const msg = (res && res.error) || 'unknown error';
+    if (att) {
+      att.tState = 'needs-model';
+      att.tNote = `Model download failed: ${msg}`;
+      renderAttachmentChips();
+    }
+    setTranscribeStatus(`Speech model download failed: ${msg}`);
+  }
+}
+
+async function transcribeAttachment(att) {
+  if (att.tState === 'working' || att.tState === 'downloading') return;
+  att.tState = 'working';
+  att.tNote = 'Transcribing on this PC…';
+  att.recordId = null;
+  chipTranscribingId = att.id;
+  renderAttachmentChips();
+  let res = null;
+  try {
+    res = await window.desktop.transcribeFile({ path: att.path, name: att.name, sourceKind: 'chat-attachment' });
+  } catch (err) {
+    res = { ok: false, error: err.message };
+  }
+  chipTranscribingId = null;
+  if (!res || !res.ok) {
+    const info = res && res.info;
+    if (info && info.fix === 'redownload-model') {
+      att.tState = 'needs-model';
+      att.tNote = info.message;
+    } else {
+      att.tState = 'error';
+      att.tNote = (res && res.error) || 'Transcription failed.';
+      if (info && info.fix === 'repair-binaries') {
+        att.tNote += ' Open the Transcripts panel (📸 Lessons & SOPs) and use its Fix button to repair the engine files.';
+      }
+    }
+    renderAttachmentChips();
+    return;
+  }
+  const full = await window.desktop.transcriptsGet(res.record.id);
+  if (!full || full.status === 'failed' || !(full.text || '').trim()) {
+    att.tState = 'error';
+    att.tNote = (full && full.error && full.error.message) || 'No speech could be transcribed from that file.';
+    renderAttachmentChips();
+    return;
+  }
+  pendingAttachments = pendingAttachments.filter((a) => a.id !== att.id);
+  const encoded = new TextEncoder().encode(full.text);
+  addPendingAttachment({
+    kind: 'document',
+    name: `${(att.name || 'recording').replace(/\.[^.]+$/, '')} — transcript`,
+    size: encoded.length,
+    text: new TextDecoder('utf-8').decode(encoded.slice(0, ATT.DOC_CAP_BYTES)),
+    truncated: encoded.length > ATT.DOC_CAP_BYTES,
+    transcriptRecordId: full.id
+  });
+  setStatus(full.complete
+    ? `Transcribed "${att.name}" on this PC (${full.coverageLabel.toLowerCase()}) — the transcript is attached, and saved in the Transcripts panel.`
+    : `Transcribed "${att.name}" — PARTIAL: ${full.coverageLabel}. The transcript is attached and saved; retry just the missing parts from the Transcripts panel.`);
+  renderTranscripts();
+}
+
+if (window.desktop.onTranscribeProgress) {
+  window.desktop.onTranscribeProgress((p) => {
+    if (!p) return;
+    if (chipTranscribingId != null && p.phase) {
+      const att = pendingAttachments.find((a) => a.id === chipTranscribingId);
+      if (att) {
+        if (p.recordId) att.recordId = p.recordId;
+        att.tNote = `Transcribing part ${p.segmentNumber || '?'} of ${p.segmentCount || '?'} — covered ${fmtClock(p.coveredSec)} of ${fmtClock(p.totalSec)}${p.percent ? ` · ${p.percent}%` : ''}`;
+        renderAttachmentChips();
+      }
+    }
+    noteTranscriptProgress(p);
+  });
+}
+if (window.desktop.onModelProgress) {
+  window.desktop.onModelProgress((p) => {
+    if (!p) return;
+    const att = pendingAttachments.find((a) => a.tState === 'downloading');
+    if (att) {
+      att.tNote = `Downloading the speech model… ${p.percent || 0}% (one-time — verified before use)`;
+      renderAttachmentChips();
+    }
+    setTranscribeStatus(`Downloading the ${p.modelId || ''} speech model… ${p.percent || 0}% of ${ATT.formatSize(p.total || 0)}`);
+  });
+}
+
 // "Save as lesson" inline form under a screenshot exchange. The image is
 // stored locally in userData only when Save is clicked.
 function addLessonSaveForm(wrap, attachment) {
@@ -519,9 +700,17 @@ function addLessonSaveForm(wrap, attachment) {
 
 async function sendUserText(text) {
   let trimmed = (text || '').trim();
-  const attachments = pendingAttachments;
+  // Media attachments never ride into a message as bytes — only
+  // their transcripts do (as documents). Untranscribed media stays
+  // staged for after the send.
+  const media = pendingAttachments.filter((a) => a.kind === 'audio' || a.kind === 'video');
+  const attachments = pendingAttachments.filter((a) => a.kind !== 'audio' && a.kind !== 'video');
   const images = attachments.filter((a) => a.kind === 'image');
   const docs = attachments.filter((a) => a.kind === 'document');
+  if (!trimmed && !attachments.length && media.length) {
+    setStatus(`"${media[0].name}" is attached but not transcribed yet — tap 🎙 on its chip to transcribe it on this PC, then send.`);
+    return;
+  }
   if (!trimmed && attachments.length) {
     trimmed = images.length && docs.length
       ? 'Take a look at these attachments.'
@@ -532,7 +721,7 @@ async function sendUserText(text) {
   if (!trimmed || sending) return;
   sending = true;
   els.send.disabled = true;
-  pendingAttachments = [];
+  pendingAttachments = media;
   renderAttachmentChips();
 
   // The stored user message carries document contents inside labeled
@@ -609,6 +798,9 @@ async function sendUserText(text) {
       addTaskCard(cardAction);
     }
     setStatus(res.mode === 'mock' ? 'Mock mode — add your API key in Settings for live Muse Spark.' : '');
+    if (media.length) {
+      setStatus(`Note: ${media.map((m) => `"${m.name}"`).join(', ')} stayed attached — media is sent as its transcript, so tap 🎙 on the chip to transcribe it first.`);
+    }
   } catch (err) {
     addMessageToDom('system', `Something went wrong: ${err.message}`);
     setStatus('');
@@ -1363,6 +1555,10 @@ function applySettings(s) {
   if (handsWaitEl) handsWaitEl.value = Number.isFinite(s.handsMaxWaitMinutes) ? s.handsMaxWaitMinutes : 30;
   const auditDefaultEl = document.getElementById('audit-night-default');
   if (auditDefaultEl) auditDefaultEl.checked = Boolean(s.auditNightDefault);
+  const whisperEl = document.getElementById('whisper-model');
+  if (whisperEl && s.whisperModel) whisperEl.value = s.whisperModel;
+  const langEl = document.getElementById('transcribe-language');
+  if (langEl && s.transcribeLanguage) langEl.value = s.transcribeLanguage;
   els.bridgePath.textContent = s.bridgePath;
   els.settingsBridgePath.textContent = s.bridgePath;
   if (s.hasKey) {
@@ -1385,6 +1581,30 @@ function openSettings() {
   const githubEl = document.getElementById('github-token');
   if (githubEl) githubEl.value = '';
   els.modal.classList.remove('hidden');
+  refreshPythonStatus();
+}
+
+// ---------- Python setup card (v0.4.5) ----------
+
+async function refreshPythonStatus() {
+  const statusEl = document.getElementById('python-status');
+  const installBtn = document.getElementById('python-install');
+  if (!statusEl) return;
+  try {
+    const res = await window.desktop.pythonStatus();
+    if (res && res.python && res.python.found) {
+      statusEl.textContent = `✓ Python ${res.python.version} is installed (found via "${res.python.launcher}").`;
+      if (installBtn) installBtn.disabled = true;
+    } else if (res && res.platform !== 'win32') {
+      statusEl.textContent = 'Python was not found. One-click install is Windows-only in this version — install Python from python.org or your package manager, then Re-check.';
+      if (installBtn) installBtn.disabled = true;
+    } else {
+      statusEl.textContent = `Python is not installed on this PC yet.${res && res.wingetAvailable ? ' winget is available — the install will use it.' : ' The install will use the official python.org installer (per-user, no admin).'}`;
+      if (installBtn) installBtn.disabled = false;
+    }
+  } catch (_) {
+    statusEl.textContent = 'Could not check for Python just now.';
+  }
 }
 function closeSettings() {
   els.modal.classList.add('hidden');
@@ -1408,6 +1628,14 @@ async function saveSettings() {
       const el = document.getElementById('hands-max-wait');
       const v = el ? parseInt(el.value, 10) : NaN;
       return Number.isFinite(v) && v > 0 ? v : 30;
+    })(),
+    whisperModel: (() => {
+      const el = document.getElementById('whisper-model');
+      return el ? el.value : undefined;
+    })(),
+    transcribeLanguage: (() => {
+      const el = document.getElementById('transcribe-language');
+      return el ? el.value : undefined;
     })()
   };
   const key = els.apiKey.value.trim();
@@ -1621,6 +1849,8 @@ document.getElementById('toggle-lessons').addEventListener('click', () => {
   document.getElementById('lessons-panel').classList.toggle('hidden');
   renderLessons();
   renderSops();
+  renderTranscribeReadiness();
+  renderTranscripts();
 });
 document.getElementById('close-lessons').addEventListener('click', () => {
   document.getElementById('lessons-panel').classList.add('hidden');
@@ -1668,6 +1898,21 @@ document.getElementById('new-chat').addEventListener('click', async () => {
 document.getElementById('open-settings').addEventListener('click', openSettings);
 document.getElementById('close-settings').addEventListener('click', closeSettings);
 document.getElementById('save-settings').addEventListener('click', saveSettings);
+// Python card: detection refresh + install via a standard approval
+// card (the plan is resolved by main for THIS machine first, so the
+// card shows the exact commands that will run).
+{
+  const recheckBtn = document.getElementById('python-recheck');
+  if (recheckBtn) recheckBtn.addEventListener('click', () => refreshPythonStatus());
+  const installBtn = document.getElementById('python-install');
+  if (installBtn) installBtn.addEventListener('click', async () => {
+    let action = { type: 'install_python' };
+    try { action = await window.desktop.resolveTask(action); } catch (_) { /* card falls back to a plain description */ }
+    closeSettings();
+    addTaskCard(action);
+    setStatus('Python install is on the approval card — nothing runs until you approve it.');
+  });
+}
 document.getElementById('clear-key').addEventListener('click', async () => {
   const updated = await window.desktop.clearKey();
   applySettings(updated);
@@ -3246,6 +3491,306 @@ document.getElementById('close-loops').addEventListener('click', () => {
 });
 document.getElementById('loops-new').addEventListener('click', () => openLoopBuilder(null));
 
+// ---------- Transcripts library + transcription setup (v0.4.5) ----------
+// Speech-to-text is LOCAL (whisper.cpp): no AI tokens, no uploads, no
+// Python. The setup box proves the engine can run BEFORE any meeting
+// depends on it — real probes, plain-language failures, one-click
+// fixes. The library lists every transcript with its coverage: a
+// transcript that does not cover the whole recording is labeled
+// PARTIAL with the missing ranges named, and only the missing parts
+// are ever re-run.
+
+const WHISPER_MODELS_UI = [
+  { id: 'base', label: 'Fast (base)', size: '~150 MB', blurb: 'short clips & voice notes' },
+  { id: 'small', label: 'Balanced (small)', size: '~490 MB', blurb: 'clear speech, still quick' },
+  { id: 'large-v3-turbo', label: 'Meeting quality (large-v3-turbo)', size: '~1.6 GB', blurb: 'meetings & long recordings — recommended' }
+];
+let transcriptsCache = [];
+const liveTranscriptProgress = {}; // recordId -> last progress payload
+const runningResumes = new Set();
+let binariesRepairTried = false;
+
+function setTranscribeStatus(text) {
+  const el = document.getElementById('transcribe-status');
+  if (el) el.textContent = text || '';
+}
+
+function noteTranscriptProgress(p) {
+  if (!p || !p.recordId) return;
+  liveTranscriptProgress[p.recordId] = p;
+  const line = document.querySelector(`[data-transcript-progress="${p.recordId}"]`);
+  if (line) {
+    line.textContent = `Transcribing part ${p.segmentNumber || '?'} of ${p.segmentCount || '?'} — covered ${fmtClock(p.coveredSec)} of ${fmtClock(p.totalSec)}${p.percent ? ` · ${p.percent}%` : ''}`;
+  }
+}
+
+async function renderTranscribeReadiness() {
+  const box = document.getElementById('transcribe-readiness');
+  if (!box) return;
+  box.innerHTML = '';
+  let readiness = null;
+  try {
+    readiness = await window.desktop.transcribeReadiness();
+  } catch (_) { /* rendered as unavailable below */ }
+  const title = document.createElement('div');
+  title.className = 'v-form-title';
+  title.textContent = 'Transcription setup';
+  box.appendChild(title);
+  if (!readiness || !readiness.ok) {
+    const note = document.createElement('div');
+    note.className = 'side-note';
+    note.textContent = 'The transcription setup check could not run in this build.';
+    box.appendChild(note);
+    return;
+  }
+  const overall = document.createElement('div');
+  overall.className = 'side-note';
+  overall.textContent = readiness.ready
+    ? '✓ Ready — transcription runs entirely on this PC. It needs nothing else: no Python, no extra installers, no internet (after the one-time model download).'
+    : 'Not ready yet — fix the item(s) below and transcription will work. Nothing here needs Python or any other installer.';
+  box.appendChild(overall);
+  for (const check of readiness.checks || []) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const mark = document.createElement('span');
+    mark.textContent = check.ok ? '✓' : '✗';
+    const label = document.createElement('span');
+    label.className = 'grow';
+    label.textContent = `${check.label} — ${check.message}`;
+    row.appendChild(mark);
+    row.appendChild(label);
+    if (!check.ok && check.fix === 'redownload-model') {
+      const btn = document.createElement('button');
+      btn.className = 'mini-btn large';
+      btn.textContent = '⬇ Download model';
+      btn.addEventListener('click', () => downloadModelFlow(settings && settings.whisperModel));
+      row.appendChild(btn);
+    }
+    if (!check.ok && check.fix === 'repair-binaries') {
+      const btn = document.createElement('button');
+      btn.className = 'mini-btn large';
+      btn.textContent = '🔧 Repair engine files';
+      btn.addEventListener('click', async () => {
+        setTranscribeStatus('Repairing the engine files from the app’s bundled copies…');
+        const res = await window.desktop.transcribeRepairBinaries();
+        binariesRepairTried = true;
+        if (res && res.readiness) {
+          setTranscribeStatus(res.readiness.ready
+            ? 'Engine files repaired — transcription is ready.'
+            : 'Repair finished, but setup still is not ready — see the checks above.');
+        }
+        renderTranscribeReadiness();
+      });
+      row.appendChild(btn);
+      if (binariesRepairTried && check.id === 'whisper-runs') {
+        const vcBtn = document.createElement('button');
+        vcBtn.className = 'mini-btn large';
+        vcBtn.textContent = 'Install Microsoft VC++ runtime';
+        vcBtn.title = 'Last resort: install the official Microsoft Visual C++ runtime system-wide, via an approval card';
+        vcBtn.addEventListener('click', async () => {
+          let action = {
+            type: 'run_command',
+            command: 'curl.exe -L -o "%USERPROFILE%\\Downloads\\vc_redist.x64.exe" "https://aka.ms/vs/17/release/vc_redist.x64.exe" && "%USERPROFILE%\\Downloads\\vc_redist.x64.exe" /install /quiet /norestart',
+            label: 'Download + install the official Microsoft Visual C++ runtime (vc_redist.x64.exe)'
+          };
+          try { action = await window.desktop.resolveTask(action); } catch (_) { /* keep raw */ }
+          document.getElementById('lessons-panel').classList.add('hidden');
+          addTaskCard(action);
+          setStatus('The VC++ runtime install is on the approval card — if Windows shows a UAC/admin prompt during it, that click is yours.');
+        });
+        row.appendChild(vcBtn);
+      }
+    }
+    if (!check.ok && check.details) {
+      const det = document.createElement('button');
+      det.className = 'mini-btn';
+      det.textContent = 'details';
+      det.addEventListener('click', () => {
+        let pre = row.parentElement.querySelector(`.check-details[data-check="${check.id}"]`);
+        if (pre) { pre.remove(); return; }
+        pre = document.createElement('pre');
+        pre.className = 'a-content check-details';
+        pre.dataset.check = check.id;
+        pre.textContent = check.details;
+        row.parentElement.insertBefore(pre, row.nextSibling);
+      });
+      row.appendChild(det);
+    }
+    box.appendChild(row);
+  }
+
+  // Model choices: state per model + download/use. First use (no
+  // model downloaded) presents the two headline choices plainly.
+  const modelsTitle = document.createElement('div');
+  modelsTitle.className = 'v-form-title';
+  modelsTitle.textContent = 'Speech models (download once — verified — then fully offline)';
+  box.appendChild(modelsTitle);
+  const anyDownloaded = WHISPER_MODELS_UI.some((m) => readiness.models && readiness.models[m.id] && readiness.models[m.id].valid);
+  if (!anyDownloaded) {
+    const intro = document.createElement('div');
+    intro.className = 'side-note';
+    intro.textContent = 'Choose a model to download. Fast is fine for short clips; for meetings and long recordings choose Meeting quality — it hears the whole meeting far more completely.';
+    box.appendChild(intro);
+  }
+  for (const m of WHISPER_MODELS_UI) {
+    const state = (readiness.models && readiness.models[m.id]) || { present: false, valid: false };
+    const selected = settings && settings.whisperModel === m.id;
+    const row = document.createElement('div');
+    row.className = 'row';
+    const label = document.createElement('span');
+    label.className = 'grow';
+    label.textContent = `${m.label} — ${m.size} · ${m.blurb}${state.valid ? ' · ✓ downloaded & verified' : state.present ? ' · ⚠ downloaded but failed verification' : ''}${selected ? ' · selected' : ''}`;
+    row.appendChild(label);
+    if (!state.valid) {
+      const dl = document.createElement('button');
+      dl.className = 'mini-btn large';
+      dl.textContent = state.present ? '⬇ Re-download' : '⬇ Download';
+      dl.addEventListener('click', () => downloadModelFlow(m.id));
+      row.appendChild(dl);
+    } else if (!selected) {
+      const use = document.createElement('button');
+      use.className = 'mini-btn large';
+      use.textContent = 'Use this model';
+      use.addEventListener('click', async () => {
+        const updated = await window.desktop.saveSettings({ whisperModel: m.id });
+        applySettings(updated);
+        setTranscribeStatus(`Speech model set to ${m.label}.`);
+        renderTranscribeReadiness();
+      });
+      row.appendChild(use);
+    }
+    box.appendChild(row);
+  }
+}
+
+async function renderTranscripts() {
+  const list = document.getElementById('transcripts-list');
+  if (!list) return;
+  try {
+    transcriptsCache = await window.desktop.transcriptsList();
+  } catch (_) {
+    transcriptsCache = [];
+  }
+  list.innerHTML = '';
+  if (!transcriptsCache.length) {
+    const empty = document.createElement('div');
+    empty.className = 'inbox-empty';
+    empty.textContent = 'No transcripts yet. Attach an audio or video file in chat and tap 🎙, or generate an SOP from a video — its narration is transcribed here automatically.';
+    list.appendChild(empty);
+    return;
+  }
+  for (const record of transcriptsCache) list.appendChild(renderTranscriptCard(record));
+}
+
+function renderTranscriptCard(record) {
+  const card = document.createElement('div');
+  card.className = 'lesson-card sop-card';
+  const body = document.createElement('div');
+  body.className = 'lesson-body';
+  const title = document.createElement('strong');
+  title.textContent = `🎙 ${record.title}`;
+  body.appendChild(title);
+  if (record.status === 'partial' || (record.status !== 'complete' && !record.complete && record.status !== 'transcribing')) {
+    const badge = document.createElement('span');
+    badge.className = 'chip needs-audit';
+    badge.textContent = record.status === 'failed' ? 'FAILED' : 'PARTIAL';
+    body.appendChild(badge);
+  }
+  const meta = document.createElement('div');
+  meta.className = 'side-note';
+  const modelLabel = (WHISPER_MODELS_UI.find((m) => m.id === record.model) || {}).label || record.model;
+  meta.textContent = `${record.coverageLabel} · ${record.sourceName || record.sourceKind} · ${modelLabel}` +
+    (record.detectedLanguage ? ` · heard: ${record.detectedLanguage}` : '') +
+    ` · ${record.wordCount || 0} words · ${new Date(record.createdAt).toLocaleString()}`;
+  body.appendChild(meta);
+  const progress = document.createElement('div');
+  progress.className = 'side-note';
+  progress.dataset.transcriptProgress = record.id;
+  if (record.status === 'transcribing') {
+    const live = liveTranscriptProgress[record.id];
+    progress.textContent = live
+      ? `Transcribing part ${live.segmentNumber || '?'} of ${live.segmentCount || '?'} — covered ${fmtClock(live.coveredSec)} of ${fmtClock(live.totalSec)}`
+      : 'Transcription was in progress when the app closed — Resume picks up the missing parts.';
+    body.appendChild(progress);
+  }
+  if (record.error && record.status !== 'complete') {
+    const err = document.createElement('div');
+    err.className = 'side-note';
+    err.textContent = record.error.message;
+    body.appendChild(err);
+  }
+
+  const row = document.createElement('div');
+  row.className = 'row';
+  const viewBtn = document.createElement('button');
+  viewBtn.className = 'mini-btn large';
+  viewBtn.textContent = '📄 View transcript';
+  viewBtn.addEventListener('click', async () => {
+    let pre = card.querySelector('.sop-full');
+    if (pre) { pre.remove(); return; }
+    const full = await window.desktop.transcriptsGet(record.id);
+    pre = document.createElement('div');
+    pre.className = 'loop-doc sop-full';
+    pre.textContent = full && full.text ? full.text : '(no transcript text)';
+    card.appendChild(pre);
+  });
+  row.appendChild(viewBtn);
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'mini-btn large';
+  copyBtn.textContent = 'Copy';
+  copyBtn.addEventListener('click', async () => {
+    const full = await window.desktop.transcriptsGet(record.id);
+    if (full && full.text) {
+      await window.desktop.writeClipboard(full.text);
+      setStatus(`Transcript copied: ${record.title}`);
+    }
+  });
+  row.appendChild(copyBtn);
+  const exportBtn = document.createElement('button');
+  exportBtn.className = 'mini-btn large';
+  exportBtn.textContent = '⬇ Export .txt';
+  exportBtn.addEventListener('click', async () => {
+    const res = await window.desktop.transcriptsExport(record.id);
+    setStatus(res && res.ok ? `Transcript saved to Bridge Outbox: ${res.filename}` : `Export failed: ${res && res.error ? res.error : 'unknown error'}`);
+  });
+  row.appendChild(exportBtn);
+  if (!record.complete && record.status !== 'transcribing') {
+    const retryBtn = document.createElement('button');
+    retryBtn.className = 'mini-btn large';
+    retryBtn.textContent = record.doneCount > 0 ? '↻ Retry missing parts' : '↻ Resume';
+    retryBtn.disabled = runningResumes.has(record.id);
+    retryBtn.addEventListener('click', async () => {
+      runningResumes.add(record.id);
+      retryBtn.disabled = true;
+      setTranscribeStatus(`Re-running only the missing parts of "${record.title}"…`);
+      const res = await window.desktop.transcribeResume(record.id);
+      runningResumes.delete(record.id);
+      if (res && res.ok) {
+        setTranscribeStatus(res.record.complete
+          ? `"${record.title}" is now complete: ${res.record.coverageLabel}.`
+          : `Still partial: ${res.record.coverageLabel}.`);
+      } else {
+        setTranscribeStatus(`Retry could not run: ${res && res.error ? res.error : 'unknown error'}`);
+      }
+      renderTranscripts();
+      renderTranscribeReadiness();
+    });
+    row.appendChild(retryBtn);
+  }
+  const delBtn = document.createElement('button');
+  delBtn.className = 'mini-btn large danger';
+  delBtn.textContent = 'Delete';
+  delBtn.addEventListener('click', async () => {
+    await window.desktop.transcriptsRemove(record.id);
+    renderTranscripts();
+    setStatus(`Transcript deleted: ${record.title}`);
+  });
+  row.appendChild(delBtn);
+  body.appendChild(row);
+  card.appendChild(body);
+  return card;
+}
+
 // ---------- Teach from video: SOPs (v0.4.0) ----------
 // Intake (Vimeo link or video file) -> frames sampled locally in a
 // hidden <video> element -> Spark writes the SOP -> saved to the SOP
@@ -3461,7 +4006,81 @@ function seekAndCapture(video, t) {
   });
 }
 
+// Transcribe a staged recording's narration locally for its SOP.
+// Returns { text } | { noSpeech: true } | 'no-audio' | 'abort'.
+// A transcription that cannot run ABORTS the SOP: generating anyway
+// would stamp a "frames only" label on a recording whose narration
+// simply was not transcribed — exactly the silent-partial failure
+// this feature exists to kill.
+async function transcribeForSop(record) {
+  let modelId = settings && settings.whisperModel;
+  try {
+    const readiness = await window.desktop.transcribeReadiness();
+    const long = (record.durationSec || 0) > 900;
+    if (readiness && readiness.models && long) {
+      if (readiness.models['large-v3-turbo'] && readiness.models['large-v3-turbo'].valid) {
+        modelId = 'large-v3-turbo';
+      } else {
+        setVideoStatus('Tip: this recording runs longer than ~15 minutes. The Meeting quality model (in the Transcripts panel below) transcribes long recordings far more completely — continuing with the current model this time…');
+      }
+    }
+  } catch (_) { /* readiness is advisory here; the transcribe call reports real failures */ }
+  let res = null;
+  try {
+    res = await window.desktop.transcribeStaged({
+      stagedId: record.stagedId,
+      title: record.title,
+      name: record.sourceLabel,
+      modelId
+    });
+  } catch (err) {
+    res = { ok: false, error: err.message };
+  }
+  if (!res || !res.ok) {
+    const info = res && res.info;
+    if (info && info.class === 'no-audio-stream') return 'no-audio';
+    setVideoStatus(`Transcription could not run: ${(res && res.error) || 'unknown error'} The SOP was NOT generated — a recording whose narration was never transcribed must not be labeled "frames only". Fix it in the Transcripts panel below, then click Generate SOP again.`);
+    return 'abort';
+  }
+  await renderTranscripts();
+  const rec = res.record;
+  if (!rec || rec.status === 'failed') {
+    const reason = rec && rec.error ? rec.error.message : 'no part of the recording could be transcribed';
+    setVideoStatus(`Transcription failed: ${reason} The SOP was NOT generated. The attempt is saved in the Transcripts panel, where the missing parts can be retried.`);
+    return 'abort';
+  }
+  const full = await window.desktop.transcriptsGet(rec.id);
+  if (!full || !(full.wordCount > 0)) {
+    return { noSpeech: true, partial: !rec.complete, coverageLabel: rec.coverageLabel };
+  }
+  return { text: full.text, partial: !rec.complete, coverageLabel: rec.coverageLabel };
+}
+
 async function generateSop(record) {
+  // v0.4.5: when the recording is staged locally and has no
+  // transcript yet, transcribe its narration on this PC FIRST — the
+  // SOP then comes from frames + the actual spoken words, and the
+  // "frames only" label survives only for recordings with genuinely
+  // no usable audio.
+  let transcriptText = pendingTranscripts[record.id];
+  let transcriptSource;
+  let noSpeech = false;
+  let transcriptNote = '';
+  if (!transcriptText && !record.hasTranscript && record.stagedId) {
+    setVideoStatus(`Transcribing the narration of "${record.title}" on this PC (local — no AI tokens)…`);
+    const outcome = await transcribeForSop(record);
+    if (outcome === 'abort') return;
+    if (outcome && outcome.text) {
+      transcriptText = outcome.text;
+      transcriptSource = 'whisper-local';
+      transcriptNote = outcome.partial ? ` (transcript PARTIAL — ${outcome.coverageLabel}; retry the missing parts in the Transcripts panel)` : '';
+    } else if (outcome && outcome.noSpeech) {
+      noSpeech = true;
+      transcriptNote = outcome.partial ? ` (transcription PARTIAL — ${outcome.coverageLabel})` : '';
+    }
+    const fresh = sopsCache.find((r) => r.id === record.id);
+    if (fresh) record = fresh;
+  }
   setVideoStatus(`Preparing "${record.title}" — sampling frames…`);
   let frames = [];
   if (record.stagedId) {
@@ -3479,17 +4098,20 @@ async function generateSop(record) {
   const res = await window.desktop.sopGenerate({
     recordId: record.id,
     frames,
-    transcriptText: pendingTranscripts[record.id]
+    transcriptText,
+    transcriptSource,
+    noSpeech
   });
   if (res && res.ok) {
     delete pendingTranscripts[record.id];
     await renderSops();
     setVideoStatus(
-      res.mode === 'mock'
+      (res.mode === 'mock'
         ? 'Mock SOP created — it is labeled as a placeholder. Add your Meta Model API key in Settings for a real analysis of the recording.'
         : res.visionRejected
           ? 'SOP created from the transcript only — the Meta Model API rejected the sampled frames as image input.'
-          : `SOP created for "${record.title}" — view it on its card, export it, or turn it into a Loop.`
+          : `SOP created for "${record.title}" — view it on its card, export it, or turn it into a Loop.`) +
+      (transcriptNote || '')
     );
   } else {
     setVideoStatus(`SOP generation failed: ${res && res.error ? res.error : 'unknown error'}`);

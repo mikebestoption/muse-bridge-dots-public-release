@@ -72,6 +72,20 @@ if (winResolver.resolve('c:\\Users\\Guessed\\Desktop\\x.txt') !== 'C:\\Users\\Re
 }
 console.log('  ✓ pathResolver loaded; guessed profile → real Desktop');
 
+// v0.4.5: the transcription core + Python setup modules must load in
+// main and behave on pure inputs (no binaries are executed here).
+const transcribeCore = require('../src/transcribeCore');
+if (transcribeCore.planSegments(3730).length !== 13 || transcribeCore.getModel('base').file !== 'ggml-base.bin') {
+  console.log('SMOKE FAIL: transcribeCore planner/registry wrong');
+  app.exit(1);
+}
+const pythonSetup = require('../src/pythonSetup');
+if (pythonSetup.parseVersionOutput('Python 3.12.10') !== '3.12.10') {
+  console.log('SMOKE FAIL: pythonSetup version parse wrong');
+  app.exit(1);
+}
+console.log('  ✓ transcribeCore + pythonSetup loaded; planner + version parse sane');
+
 require('../main.js');
 
 const FAKE_PW = 'Fake!Pass-98765';
@@ -462,6 +476,98 @@ const REQUESTS_SCRIPT = `
 })()
 `;
 
+// v0.4.5: local transcription + Python card in the real app. The WAV
+// fixture is a generated sine+silence tone (mechanics only — accuracy
+// on real speech is not claimed). No model exists in the smoke
+// userData, so the transcribe call must stop at the honest
+// model-missing gate (never a fake transcript), readiness must render
+// its setup checks + model choices in the Lessons panel, a synthetic
+// dropped .wav (no on-disk path) must be refused honestly, and the
+// Python card + transcription settings must round-trip.
+const TRANSCRIBE_SCRIPT = `
+(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const checks = [];
+  const M = window.MuseAttachments;
+  const wavCls = M.classifyFile({ name: 'note.wav', type: 'audio/wav', size: 100, sample: null });
+  if (wavCls.kind !== 'audio') throw new Error('classify .wav failed: ' + JSON.stringify(wavCls));
+  const mp4Cls = M.classifyFile({ name: 'clip.mp4', type: 'video/mp4', size: 100, sample: null });
+  if (mp4Cls.kind !== 'video') throw new Error('classify .mp4 failed: ' + JSON.stringify(mp4Cls));
+  checks.push('in-page classification: wav -> audio, mp4 -> video');
+
+  // Settings: the Python card + transcription selects exist; Python
+  // detection resolves to SOME honest state; settings round-trip.
+  document.getElementById('open-settings').click();
+  await sleep(300);
+  if (!document.getElementById('python-install')) throw new Error('Python Install button missing from Settings');
+  if (!document.getElementById('whisper-model')) throw new Error('whisper model select missing from Settings');
+  if (!document.getElementById('transcribe-language')) throw new Error('transcribe language select missing from Settings');
+  let pyText = '';
+  for (let i = 0; i < 20; i++) {
+    await sleep(300);
+    pyText = document.getElementById('python-status').textContent || '';
+    if (pyText.includes('Python')) break;
+  }
+  if (!pyText.includes('Python')) throw new Error('Python card never reported a state: ' + pyText);
+  checks.push('Python card renders a detection state: ' + pyText.slice(0, 60));
+  document.getElementById('close-settings').click();
+  await sleep(200);
+  await window.desktop.saveSettings({ whisperModel: 'large-v3-turbo', transcribeLanguage: 'es' });
+  const pub = await window.desktop.getSettings();
+  if (pub.whisperModel !== 'large-v3-turbo') throw new Error('whisperModel did not round-trip: ' + pub.whisperModel);
+  if (pub.transcribeLanguage !== 'es') throw new Error('transcribeLanguage did not round-trip: ' + pub.transcribeLanguage);
+  await window.desktop.saveSettings({ whisperModel: 'base', transcribeLanguage: 'auto' });
+  checks.push('transcription settings round-trip (model + language)');
+
+  // Readiness over IPC: checks render; the model gate is the honest
+  // blocker in a fresh profile (binaries seed from the app resources).
+  const readiness = await window.desktop.transcribeReadiness();
+  if (!readiness || !Array.isArray(readiness.checks)) throw new Error('readiness IPC returned no checks');
+  const modelCheck = readiness.checks.find((c) => c.id === 'model');
+  if (!modelCheck || modelCheck.ok || modelCheck.fix !== 'redownload-model') {
+    throw new Error('fresh profile model check should fail with the download fix: ' + JSON.stringify(modelCheck));
+  }
+  if (readiness.ready) throw new Error('readiness claims ready with no model downloaded');
+  checks.push('readiness IPC: model gate honest (fix = download), not ready');
+
+  // Transcribe the WAV fixture: must stop at the model gate with the
+  // plain message — the engine never fakes a transcript.
+  const res = await window.desktop.transcribeFile({ path: window.__SMOKE_WAV_PATH, name: 'smoke-tone.wav', sourceKind: 'chat-attachment' });
+  if (!res || res.ok) throw new Error('transcribe without a model should not succeed: ' + JSON.stringify(res));
+  if (!res.info || res.info.class !== 'model-missing') throw new Error('expected model-missing, got: ' + JSON.stringify(res));
+  if (!String(res.error || '').includes('not downloaded yet')) throw new Error('model-missing message not plain: ' + res.error);
+  checks.push('transcribe stops at the model gate with a plain message (no fake transcript)');
+  const listAfter = await window.desktop.transcriptsList();
+  if (!Array.isArray(listAfter) || listAfter.length !== 0) throw new Error('a gated transcription must not create a library record');
+
+  // A dropped media File has no on-disk path: refused honestly, by name.
+  const row = document.getElementById('attachments-row');
+  const dtWav = new DataTransfer();
+  dtWav.items.add(new File([new Uint8Array([82, 73, 70, 70])], 'pathless.wav', { type: 'audio/wav' }));
+  window.dispatchEvent(new DragEvent('drop', { dataTransfer: dtWav, bubbles: true }));
+  await sleep(500);
+  const st = document.getElementById('status-line').textContent || '';
+  if (!st.includes('pathless.wav') || !st.includes('no path on this PC')) throw new Error('pathless media drop not refused honestly: ' + st);
+  if ((row.innerText || '').includes('pathless.wav')) throw new Error('pathless media was staged as a chip');
+  checks.push('pathless media drop refused with a named, honest note');
+
+  // The Lessons panel renders the Transcripts section: setup checks,
+  // both headline model choices, and the empty-library note.
+  document.getElementById('toggle-lessons').click();
+  await sleep(1200);
+  const readinessText = document.getElementById('transcribe-readiness').innerText || '';
+  if (!readinessText.includes('Transcription setup')) throw new Error('setup box did not render');
+  if (!readinessText.includes('Meeting quality')) throw new Error('meeting model choice missing: ' + readinessText.slice(0, 200));
+  if (!readinessText.includes('Fast (base)')) throw new Error('fast model choice missing');
+  if (!readinessText.includes('Nothing here needs Python')) throw new Error('setup box does not state the no-Python guarantee');
+  const libText = document.getElementById('transcripts-list').innerText || '';
+  if (!libText.includes('No transcripts yet')) throw new Error('empty library note missing: ' + libText);
+  checks.push('Transcripts panel renders setup checks + model choices + empty library');
+  document.getElementById('toggle-lessons').click();
+  return checks;
+})()
+`;
+
 // v0.3.2: small-viewport panel layout assertions. Run after PAGE_SCRIPT at
 // each window size; throws (failing the smoke) on the first violation.
 const LAYOUT_SCRIPT = `
@@ -562,6 +668,29 @@ app.whenReady().then(async () => {
     // v0.4.1: Ask Muse no-token draft circuit + token settings round-trip.
     const reqChecks = await win.webContents.executeJavaScript(REQUESTS_SCRIPT);
     for (const c of reqChecks) console.log('  ✓', c);
+    // v0.4.5: transcription + Python card. The WAV fixture is a real
+    // (generated) WAV — 0.5 s of 440 Hz tone + 0.5 s of silence; it
+    // proves the file path plumbing, never speech accuracy.
+    const wavPath = path.join(tmp, 'smoke-tone.wav');
+    {
+      const sampleRate = 16000;
+      const frames = sampleRate; // 1 second
+      const data = Buffer.alloc(frames * 2);
+      for (let i = 0; i < frames; i++) {
+        const v = i < sampleRate / 2 ? Math.round(Math.sin((2 * Math.PI * 440 * i) / sampleRate) * 8000) : 0;
+        data.writeInt16LE(v, i * 2);
+      }
+      const header = Buffer.alloc(44);
+      header.write('RIFF', 0); header.writeUInt32LE(36 + data.length, 4); header.write('WAVE', 8);
+      header.write('fmt ', 12); header.writeUInt32LE(16, 16); header.writeUInt16LE(1, 20);
+      header.writeUInt16LE(1, 22); header.writeUInt32LE(sampleRate, 24);
+      header.writeUInt32LE(sampleRate * 2, 28); header.writeUInt16LE(2, 32); header.writeUInt16LE(16, 34);
+      header.write('data', 36); header.writeUInt32LE(data.length, 40);
+      fs.writeFileSync(wavPath, Buffer.concat([header, data]));
+    }
+    await win.webContents.executeJavaScript(`window.__SMOKE_WAV_PATH = ${JSON.stringify(wavPath)}; true;`);
+    const transcribeChecks = await win.webContents.executeJavaScript(TRANSCRIBE_SCRIPT);
+    for (const c of transcribeChecks) console.log('  ✓', c);
     // The fake token the page saved must be encrypted at rest, never plaintext.
     const settingsOnDisk = fs.readFileSync(path.join(tmp, 'settings.json'), 'utf8');
     if (settingsOnDisk.includes('smoke-fake-gh-token')) {

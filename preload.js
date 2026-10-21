@@ -22,6 +22,27 @@ contextBridge.exposeInMainWorld('desktop', {
   // bytes cross here and the main process extracts the text.
   extractPdfText: (bytes) => ipcRenderer.invoke('attachments:extractPdfText', bytes),
 
+  // Local transcription (v0.4.5): on-device whisper.cpp + ffmpeg.
+  // Files cross by PATH only; transcripts come back as library
+  // records. Progress arrives on the two listener channels.
+  transcribeReadiness: () => ipcRenderer.invoke('transcribe:readiness'),
+  transcribeDownloadModel: (modelId) => ipcRenderer.invoke('transcribe:downloadModel', modelId),
+  transcribeRepairBinaries: () => ipcRenderer.invoke('transcribe:repairBinaries'),
+  transcribeFile: (payload) => ipcRenderer.invoke('transcribe:file', payload),
+  transcribeStaged: (payload) => ipcRenderer.invoke('transcribe:staged', payload),
+  transcribeResume: (recordId) => ipcRenderer.invoke('transcribe:resume', recordId),
+  transcribeCancel: (recordId) => ipcRenderer.invoke('transcribe:cancel', recordId),
+  onTranscribeProgress: (cb) => ipcRenderer.on('transcribe:progress', (_e, payload) => cb(payload)),
+  onModelProgress: (cb) => ipcRenderer.on('transcribe:modelProgress', (_e, payload) => cb(payload)),
+  transcriptsList: () => ipcRenderer.invoke('transcripts:list'),
+  transcriptsGet: (id) => ipcRenderer.invoke('transcripts:get', id),
+  transcriptsRemove: (id) => ipcRenderer.invoke('transcripts:remove', id),
+  transcriptsExport: (id) => ipcRenderer.invoke('transcripts:export', id),
+
+  // Python setup (v0.4.5): detection status; the install itself is a
+  // standard approval-card action (install_python) via executeTask.
+  pythonStatus: () => ipcRenderer.invoke('python:status'),
+
   getHistory: () => ipcRenderer.invoke('history:get'),
   saveHistory: (messages) => ipcRenderer.invoke('history:save', messages),
   clearHistory: () => ipcRenderer.invoke('history:clear'),

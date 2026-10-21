@@ -1,4 +1,4 @@
-; Muse Bridge 0.4.4 — native-compiled NSIS installer
+; Muse Bridge 0.4.5 — native-compiled NSIS installer
 ; Hand-written fallback for the electron-builder NSIS target, compiled with the
 ; native Linux makensis (the wine-based builder cannot execute 32-bit PE on
 ; the build VM). Install behavior is identical to the electron-builder NSIS
@@ -8,19 +8,19 @@
 !include "MUI2.nsh"
 
 !define PRODUCT_NAME "Muse Bridge"
-!define PRODUCT_VERSION "0.4.4"
+!define PRODUCT_VERSION "0.4.5"
 !define PRODUCT_PUBLISHER "Best Option Funding Inc."
 !define APP_EXE "Muse Bridge.exe"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\MuseBridge"
 !define SRC_DIR "dist\win-unpacked"
 
 Name "${PRODUCT_NAME}"
-OutFile "dist\MuseBridge-0.4.4-setup.exe"
+OutFile "dist\MuseBridge-0.4.5-setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\Muse Bridge"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 
-VIProductVersion "0.4.4.0"
+VIProductVersion "0.4.5.0"
 VIAddVersionKey "ProductName" "${PRODUCT_NAME}"
 VIAddVersionKey "ProductVersion" "${PRODUCT_VERSION}"
 VIAddVersionKey "CompanyName" "${PRODUCT_PUBLISHER}"

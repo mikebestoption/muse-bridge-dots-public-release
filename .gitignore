@@ -28,3 +28,13 @@ MuseBridge/
 Thumbs.db
 .vscode/
 .idea/
+
+# Fetched transcription runtime executables (scripts/fetch-binaries.js
+# downloads them from the pinned URLs + hashes in resources/bin/manifest.json;
+# the small Microsoft runtime DLLs next to them ARE tracked on purpose)
+resources/bin/ffmpeg.exe
+resources/bin/whisper-cli.exe
+resources/bin/whisper.dll
+resources/bin/ggml.dll
+resources/bin/ggml-base.dll
+resources/bin/ggml-cpu.dll

@@ -43,9 +43,16 @@
 
   const MAX_IMAGE_BYTES = 8 * 1024 * 1024; // matches the Teach-mode cap
   const MAX_PDF_BYTES = 25 * 1024 * 1024; // raw PDF cap (extracted text is capped separately)
+  const MAX_MEDIA_BYTES = 500 * 1024 * 1024; // audio/video for local transcription (v0.4.5)
   const DOC_CAP_BYTES = 100 * 1024; // per-file text cap in a message
   const DOC_CAP_LABEL = '100 KB';
   const SNIFF_BYTES = 1024; // how much of a file classification samples
+
+  // Media for LOCAL transcription (v0.4.5): the file itself is staged
+  // by path (never read into the page) and transcribed on-device by
+  // the main process — see src/transcriber.js.
+  const AUDIO_EXTENSIONS = new Set(['mp3', 'wav', 'm4a', 'ogg', 'oga', 'opus', 'flac', 'aac', 'wma']);
+  const VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'm4v', 'mkv']);
 
   // Extensions that are plain text by convention. Anything else can
   // still qualify as a document via its MIME type or by content sniff.
@@ -164,6 +171,30 @@
       return { kind: 'pdf', via };
     }
 
+    // Audio / video (v0.4.5): decided before the text rules — media
+    // bytes are binary, and a stray text-ish header must not let the
+    // document path claim them. These stage by path and are
+    // transcribed locally; they never ride into a message as bytes.
+    const ext = extensionOf(name);
+    if (AUDIO_EXTENSIONS.has(ext) || mime.startsWith('audio/')) {
+      if (size > MAX_MEDIA_BYTES) {
+        return unsupported(
+          'media-too-large',
+          `"${label}" is ${formatSize(size)} — audio and video files are capped at about ${formatSize(MAX_MEDIA_BYTES)} for transcription.`
+        );
+      }
+      return { kind: 'audio', via: AUDIO_EXTENSIONS.has(ext) ? 'extension' : 'mime' };
+    }
+    if (VIDEO_EXTENSIONS.has(ext) || mime.startsWith('video/')) {
+      if (size > MAX_MEDIA_BYTES) {
+        return unsupported(
+          'media-too-large',
+          `"${label}" is ${formatSize(size)} — audio and video files are capped at about ${formatSize(MAX_MEDIA_BYTES)} for transcription.`
+        );
+      }
+      return { kind: 'video', via: VIDEO_EXTENSIONS.has(ext) ? 'extension' : 'mime' };
+    }
+
     if (TEXT_EXTENSIONS.has(extensionOf(name))) {
       return { kind: 'document', via: 'extension' };
     }
@@ -177,7 +208,7 @@
     }
     return unsupported(
       'binary',
-      `"${label}" can't be read as an image or a text document, so it was not attached. Attach png/jpeg/webp images, pdf files, or text files (txt, md, json, csv, log, code) instead.`
+      `"${label}" can't be read as an image, a text document, or media to transcribe, so it was not attached. Attach png/jpeg/webp images, pdf files, text files (txt, md, json, csv, log, code), or audio/video (mp3, wav, m4a, mp4, webm, mov) instead.`
     );
   }
 
@@ -233,8 +264,11 @@
   return {
     IMAGE_MIME_TYPES,
     TEXT_EXTENSIONS,
+    AUDIO_EXTENSIONS,
+    VIDEO_EXTENSIONS,
     MAX_IMAGE_BYTES,
     MAX_PDF_BYTES,
+    MAX_MEDIA_BYTES,
     DOC_CAP_BYTES,
     DOC_CAP_LABEL,
     SNIFF_BYTES,

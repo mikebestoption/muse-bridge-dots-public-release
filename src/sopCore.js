@@ -185,7 +185,7 @@
     '- <mistakes to avoid, anything unclear in the recording>'
   ].join('\n');
 
-  function buildSopUserText({ title, transcript, frameCount, transcriptSource }) {
+  function buildSopUserText({ title, transcript, frameCount, transcriptSource, noSpeechDetected }) {
     const hasTranscript = typeof transcript === 'string' && transcript.trim().length > 0;
     const lines = [
       `Turn this recording into an SOP. Recording title: ${title || 'Untitled recording'}.`,
@@ -197,10 +197,18 @@
       lines.push('No frames could be sampled from this recording — base the SOP on the transcript only, and note that in the Watch-outs.');
     }
     if (hasTranscript) {
-      lines.push(`Narration transcript (source: ${transcriptSource || 'provided'}):`);
+      const sourceLabel = transcriptSource === 'whisper-local'
+        ? 'transcribed locally on this PC by whisper.cpp'
+        : (transcriptSource || 'provided');
+      lines.push(`Narration transcript (source: ${sourceLabel}):`);
       lines.push('---');
       lines.push(transcript.slice(0, 60000));
       lines.push('---');
+    } else if (noSpeechDetected) {
+      // v0.4.5: the audio WAS transcribed locally — it simply held no
+      // detectable speech. That is a different fact from "no
+      // transcript exists", and the SOP must not claim otherwise.
+      lines.push('The recording HAS an audio track, and it was transcribed locally on this PC — but no speech was detected in it. Base every step strictly on the frames, and note in the Watch-outs that the recording carried no audible narration.');
     } else {
       lines.push(`There is NO narration transcript for this recording — it is ${FRAMES_ONLY_LABEL}. Base every step strictly on the frames.`);
     }
@@ -288,7 +296,7 @@
     const lines = [
       `# SOP: ${s.title || title || 'Untitled SOP'}`,
       '',
-      `Source: ${sourceLabel || 'recording'} · Frames sampled: ${frameCount || 0} · Transcript: ${transcriptSource && transcriptSource !== 'none' ? transcriptSource : FRAMES_ONLY_LABEL}${createdAt ? ` · Created: ${createdAt}` : ''}`,
+      `Source: ${sourceLabel || 'recording'} · Frames sampled: ${frameCount || 0} · Transcript: ${transcriptSource && transcriptSource !== 'none' ? (transcriptSource === 'whisper-local' ? 'local transcription on this PC (whisper.cpp)' : transcriptSource) : FRAMES_ONLY_LABEL}${createdAt ? ` · Created: ${createdAt}` : ''}`,
       ''
     ];
     if (s.goal) lines.push('## Goal', '', s.goal, '');

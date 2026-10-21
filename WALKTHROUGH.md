@@ -688,7 +688,106 @@ Click **🔁 Turn into a Loop** on a generated SOP. The app builds a
   loop**. The draft is **never auto-run** — it runs only when you run
   it, under the normal approval rules.
 
-## 16. ✉️ Ask Muse — asking for features from inside the app
+## 16. 🎙 Transcripts — speech-to-text on your own PC (and the 🐍 Python card)
+
+**What it is, in one sentence:** the app can now turn recordings —
+audio files and the sound inside videos — into text, entirely on
+your own PC: no AI tokens, nothing uploaded, works offline.
+
+### Transcribe something
+
+1. In chat, attach a recording with the 📎 button (audio:
+   mp3/wav/m4a/ogg/flac/webm; video: mp4/webm/mov/mkv).
+2. The file appears as a chip with a **🎙** button. Tap it.
+3. The app transcribes on this PC. Long recordings go in 5-minute
+   parts — the chip shows "part x of y — covered 47:10 of 62:10" so
+   you can watch it march to the end. **⏹** cancels; parts already
+   finished stay saved in the library (see below).
+4. When it finishes, the chip becomes **"<name> — transcript"**, a
+   document you can send with your next message, exactly like an
+   attached document. The transcript is ALSO saved in the library
+   automatically.
+
+The first time, the app needs its **speech model** — one download,
+then never again. If no model is downloaded yet, the chip offers
+**⬇** and the Transcripts panel explains the choice:
+
+- **Fast (base, ~150 MB)** — short clips, voice notes, quick checks.
+- **Meeting quality (large-v3-turbo, ~1.6 GB)** — **recommended for
+  meetings** and anything long. It hears the whole meeting far more
+  completely. (A middle "Balanced (small, ~490 MB)" option exists
+  too.)
+
+Every download is **verified** against the model's known fingerprint
+before it is trusted; a download that fails the check is deleted, and
+a half-finished download is never treated as complete. In
+**Settings → Transcription** you can switch models and set the
+language: **Auto-detect** (default), English, or Spanish — the models
+understand both. Note: transcripts have **no speaker labels** — the
+engine hears words, not who said them, and the app will never fake
+names. Each 5-minute part carries its timestamp instead.
+
+### Nothing half-done, ever
+
+Every transcript states its coverage at the top:
+**"Transcribed 62:10 of 62:10"**. If a part fails, the transcript is
+labeled **PARTIAL**, names the exact missing ranges ("missing
+20:00–25:00", also shown as a gap line inside the text), and the
+library card offers **↻ Retry missing parts** — which re-runs ONLY
+the gaps. If the app closes mid-meeting, the partial transcript is
+still in the library when you come back, ready to resume.
+
+### The Transcripts library
+
+Open **📸 Lessons & SOPs** — the **🎙 Transcripts** section sits
+under the video SOPs. Each card shows the coverage, where the
+recording came from, the model used, the language heard, and the
+word count, with **📄 View transcript**, **Copy**, **⬇ Export .txt**
+(to the Bridge Outbox), **↻ Retry missing parts** when needed, and
+**Delete**. Transcripts are data on your PC only — they leave the
+machine only inside a message you send or a file you export.
+
+### Teach from video hears the words now
+
+When you click **📝 Generate SOP** on a recording (Section 15), the
+app first transcribes its narration on this PC, so the SOP is built
+from the frames AND what was said. Recordings longer than ~15
+minutes use the Meeting quality model automatically when it is
+downloaded. The old "from video frames only" label now appears only
+for recordings that truly have no audio; a silent recording says
+"no speech detected"; and if transcription itself cannot run, the
+SOP is NOT generated — you get the plain reason and a fix, never a
+mislabeled SOP.
+
+### If transcription "only errors" — the setup check
+
+The Transcripts section opens with a **Transcription setup** box
+that proves everything with real runs: engine files present (the app
+bundles its own Microsoft runtime DLLs privately — no system install,
+no admin prompts), ffmpeg starts, the whisper engine starts, the
+model is present and verified, working space is writable, and disk
+space is sane. A failed check explains itself in plain words and
+offers its **Fix**: download/re-download the model, or **🔧 Repair
+engine files** (the app restores its own bundled copies). As a last
+resort it can offer Microsoft's official VC++ runtime install —
+through a normal approval card, never silently. The raw technical
+detail is under each check's **details** button. And to be clear:
+transcription needs **no Python, no pip, no other installers** —
+after the one-time model download it needs nothing else at all.
+
+### The 🐍 Python card (Settings)
+
+Separately, **Settings → 🐍 Python** shows whether Python is
+installed on the PC (and its version). **Install Python** does not
+install anything by itself: it builds the exact install (winget if
+available, otherwise the official python.org per-user installer) and
+puts it on a standard **approval card** showing the exact commands —
+nothing runs until you approve it. If Windows shows a UAC/admin
+prompt during the install, that click is yours; the card says so up
+front. After installing, **Re-check** confirms the version the app
+can see. (One-click install is Windows-only in this version.)
+
+## 17. ✉️ Ask Muse — asking for features from inside the app
 
 You don't have to open the Muse chat to ask for something. The
 **✉️ Ask Muse** panel (left column) takes the request right here:
@@ -773,7 +872,7 @@ The full contract between the app and Muse's side — file formats,
 status vocabulary, who writes what — lives in
 `docs/REQUESTS-PROTOCOL.md` in the repo.
 
-## 17. Where everything lives — the Bridge folder and logs
+## 18. Where everything lives — the Bridge folder and logs
 
 By default the Bridge folder is in your **Documents**:
 
@@ -803,7 +902,7 @@ status list (the sent requests themselves live in the private repo's
 Nothing in this app is uploaded anywhere except your chat messages going
 to Meta when you are in live mode.
 
-## 18. Troubleshooting
+## 19. Troubleshooting
 
 **"It says Mock mode / my answers start with [Mock mode…]"**
 You have not added an API key yet, or it was removed. **⚙ Settings** →
@@ -829,6 +928,22 @@ they always work.
 **"A task card is showing a command I don't understand"**
 Click **Deny**. Always. Then ask in chat: "explain that step in plain
 words first." A step you don't understand is a step that doesn't run.
+
+**"Transcription says it is not ready / a setup check has a ✗"**
+Open **📸 Lessons & SOPs → 🎙 Transcripts**. The **Transcription
+setup** box names the problem in plain words — usually the speech
+model has not been downloaded yet (**⬇ Download** on the model row),
+or the engine files need their **🔧 Repair** button. Transcription
+never needs Python or any other program installed; if it still fails
+after the Fix, open the check's **details** and send that text to
+Muse.
+
+**"My transcript says PARTIAL / a meeting did not fully transcribe"**
+Nothing was lost quietly: the header names the exact missing ranges.
+On the transcript's card in the **🎙 Transcripts** library, click
+**↻ Retry missing parts** — only the gaps re-run. For long meetings,
+also make sure the **Meeting quality** model is downloaded and
+selected (Section 16) — it drops far fewer words than Fast.
 
 **"Creating a file failed: 'EPERM: operation not permitted, mkdir C:\Users\<you>'"**
 That was a v0.3.0 bug — Spark guessed your Windows profile path, and the

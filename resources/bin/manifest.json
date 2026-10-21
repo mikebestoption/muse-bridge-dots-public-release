@@ -1,0 +1,35 @@
+{
+  "comment": "Pinned third-party runtime binaries for LOCAL transcription (v0.4.5). The executables are NOT stored in git (size); scripts/fetch-binaries.js downloads them from the pinned URLs below and verifies every SHA-256 before a build is packaged. The five Microsoft runtime DLLs ARE in git (small, redistributable) so whisper.exe never dies with 'MSVCP140.dll was not found' on a clean machine. Models are never here: they download on first use into userData.",
+  "ffmpeg": {
+    "files": {
+      "ffmpeg.exe": "04e1307997530f9cf2fe35cba2ca7e8875ca91da02f89d6c7243df819c94ad00"
+    },
+    "license": "LICENSE.ffmpeg.txt",
+    "url": "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-win32-x64",
+    "version": "6.1.1 (eugeneware/ffmpeg-static build b6.1.1, win32 x64, static)"
+  },
+  "msvcRuntime": {
+    "comment": "Official Microsoft Visual C++ v14 runtime DLLs (x64), extracted from Microsoft's vc_redist.x64.exe (VS 2022, bundle build 2025-06-11). They sit NEXT TO the whisper executables so Windows loads them privately \u2014 no system install, no admin, no missing-DLL errors. vcomp140.dll is included because ggml-cpu.dll imports it (OpenMP). Redistribution is permitted under Microsoft's Visual C++ Redistributable terms.",
+    "files": {
+      "msvcp140.dll": "0f885b509a685d2bbfa652fed26b5fb31d88fbdab0a978c641d1c7b8aa460aa9",
+      "vcomp140.dll": "55aba23cdcd6484fbb06f4155b8ca75adfce7a881f10afd0c49457165e677164",
+      "vcruntime140.dll": "d5e4d9a3e835fa679450145d6a7d94e36573a509317111904d9b3712c30d9066",
+      "vcruntime140_1.dll": "1f2d41c4aa5db0bc33ebf7b66d72943a817d7ce6cbe880502a9403823633093f",
+      "vcruntime140_threads.dll": "219915cf20822f34d5e7c1fdd4e21ae7f3396881096c51036225fb8f84b47afa"
+    },
+    "source": "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+  },
+  "whisperCpp": {
+    "archiveSha256": "0d2eca299c248f965bd0341bcb219db4b433c7f0c0ce2200d4df85765e8156a9",
+    "archiveUrl": "https://github.com/ggerganov/whisper.cpp/releases/download/v1.7.6/whisper-bin-x64.zip",
+    "files": {
+      "ggml-base.dll": "e912e19071c32d673a81de4aab058d36328cc6b0c59c75889a0ba4c65fd6a4e6",
+      "ggml-cpu.dll": "341ed96e2520ef9b44509f18b5ac4f60d171e47a6c55ab390d704ea7b06ae617",
+      "ggml.dll": "f91ef57cfd6d2f07a5fc33e5dca114b3dc3abe8495f47b46dfbe178d6d775c37",
+      "whisper-cli.exe": "b7c6dc2e999a80bc2d23cd4c76701211f392ae55d5cabdf0d45eb2ca4faf09af",
+      "whisper.dll": "bbeceed370799687a363244edc583bac3dc5d472f5bd14691a26f22c7e710bb8"
+    },
+    "license": "LICENSE.whisper.txt",
+    "version": "v1.7.6"
+  }
+}
